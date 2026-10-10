@@ -137,77 +137,11 @@ class NaukriPortal(Portal):
         if getattr(self, "_pw", None):
             await self._pw.stop()  # disconnects from Chrome
 
-    # ---- Previous implementation (Playwright launches its own Chrome/Chromium); kept for reference ----
-    # async def open(self) -> None:
-    #     self._login_attempted = False
-    #     BROWSER_DIR.mkdir(parents=True, exist_ok=True)
-    #     self._pw = await async_playwright().start()
-    #     args = list(LEAN_PROFILE_ARGS)
-    #     if self.settings.hide_window and not self.settings.headless:
-    #         # Still a real headed window (Naukri allows it), just parked off-screen; the web UI live view shows it.
-    #         args.append("--window-position=-32000,-32000")
-    #     options = dict(
-    #         headless=self.settings.headless,
-    #         viewport={"width": 1466, "height": 860},
-    #         locale="en-IN",
-    #         timezone_id="Asia/Kolkata",
-    #         args=args,
-    #     )
-    #     path = str(BROWSER_DIR / "naukri")
-    #     try:
-    #         # The installed Chrome looks like a normal user's browser; the bundled Chromium is easier to flag.
-    #         self.ctx: BrowserContext = await self._pw.chromium.launch_persistent_context(
-    #             path, channel=self.settings.browser_channel or None, **options)
-    #     except PWError as e:
-    #         if not self.settings.browser_channel:
-    #             raise
-    #         log.warning("Browser channel '%s' unavailable (%s); using bundled Chromium", self.settings.browser_channel, str(e).splitlines()[0])
-    #         self.ctx = await self._pw.chromium.launch_persistent_context(path, **options)
-    #     self.page: Page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
-    #     live_view.set_page(self.page)
-    #
-    # async def close(self) -> None:
-    #     live_view.set_page(None)
-    #     if getattr(self, "ctx", None):
-    #         await self.ctx.close()
-    #         prune_profile(BROWSER_DIR / "naukri")
-    #     if getattr(self, "_pw", None):
-    #         await self._pw.stop()
-    #
-    # Helpers the old implementation used (module-level in the original file):
-    # # Keep storage/browser/naukri small: only cookies and site storage matter for the login session.
-    # LEAN_PROFILE_ARGS = [
-    #     "--disk-cache-size=1", "--media-cache-size=1", "--disable-gpu-shader-disk-cache",
-    #     "--disable-background-networking", "--disable-component-update", "--disable-sync",
-    #     "--disable-breakpad", "--no-first-run", "--no-default-browser-check", "--password-store=basic",
-    # ]
-    #
-    # # What must survive between runs: cookies, site storage and the key (Local State) that decrypts the cookies.
-    # PROFILE_KEEP = {"Local State": None, "Default": {"Network", "Local Storage", "IndexedDB", "Session Storage",
-    #                                                   "WebStorage", "Preferences", "Secure Preferences"}}
-    #
-    # def prune_profile(profile: Path) -> None:
-    #     """Delete everything in the Chromium profile that the login session does not need (caches, history, logs)."""
-    #     for entry in profile.iterdir() if profile.is_dir() else []:
-    #         if entry.name not in PROFILE_KEEP:
-    #             _remove(entry)
-    #         elif PROFILE_KEEP[entry.name] and entry.is_dir():
-    #             for child in entry.iterdir():
-    #                 if child.name not in PROFILE_KEEP[entry.name]:
-    #                     _remove(child)
-    #
-    #
-    # def _remove(path: Path) -> None:
-    #     try:
-    #         shutil.rmtree(path) if path.is_dir() else path.unlink()
-    #     except OSError as e:  # a file still locked by Chromium is harmless; it is removed on the next run
-    #         log.debug("Could not remove %s: %s", path, e)
-
     async def _goto(self, url: str) -> None:
         await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
         title = (await self.page.title() or "").lower()
         if "access denied" in title or "captcha" in title:
-            raise PortalBlocked(f"Naukri blocked the request ({title}). Try headless: false and lower volume.")
+            raise PortalBlocked(f"Naukri blocked the request ({title}). Lower the volume and retry later.")
 
     # ------------------------------------------------------------ search
 
@@ -379,8 +313,6 @@ class NaukriPortal(Portal):
 
 async def login_session() -> str:
     """Sign in automatically if possible, else let the user sign in by hand; the session is saved in storage/browser."""
-    from job_copilot.models import PortalSettings
-
     async with NaukriPortal(PortalSettings()) as portal:
         try:
             ok, reason = await portal.login()

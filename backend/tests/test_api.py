@@ -64,9 +64,8 @@ def test_unknown_job_is_404(client):
     assert client.post("/api/jobs/missing/approve").status_code == 404
 
 
-def test_browser_frame_is_204_when_no_browser(client):
+def test_browser_status_inactive_without_browser(client):
     assert client.get("/api/browser/status").json() == {"active": False}
-    assert client.get("/api/browser/frame").status_code == 204
 
 
 def test_browser_ws_rejects_foreign_origin(client):
@@ -83,8 +82,6 @@ def test_browser_ws_idle_without_browser(client):
 
 
 def test_login_start_reports_state_and_hides_password(client, monkeypatch):
-    import asyncio
-
     from job_copilot.portals import naukri
 
     seen = {}

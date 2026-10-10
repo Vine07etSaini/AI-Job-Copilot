@@ -1,11 +1,11 @@
-"""Live view of the automated browser: status, a screenshot, and an interactive WebSocket view."""
+"""Live view of the automated browser: status and an interactive WebSocket view."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from fastapi import APIRouter, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from job_copilot.portals import live_view
 
@@ -17,15 +17,6 @@ router = APIRouter(prefix="/api/browser", tags=["browser"])
 @router.get("/status")
 def status() -> dict:
     return {"active": live_view.is_active()}
-
-
-@router.get("/frame")
-async def frame() -> Response:
-    """Latest JPEG frame; 204 when no browser is open."""
-    data = await live_view.snapshot()
-    if data is None:
-        return Response(status_code=204)
-    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 # ---- Interactive view: screencast out, mouse/keyboard in ----
