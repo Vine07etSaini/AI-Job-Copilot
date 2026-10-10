@@ -1,15 +1,19 @@
-"""Thin wrapper around the Google Gen AI SDK (Gemini) using an API key."""
+"""Thin wrapper around the Google Gen AI SDK (Gemini) using an API key or a Vertex AI service account."""
 
 from __future__ import annotations
 
 import logging
+import json
 import os
 import time
+from pathlib import Path
 from typing import TypeVar
 
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
+
+from job_copilot.config import ROOT
 
 log = logging.getLogger(__name__)
 
@@ -23,15 +27,45 @@ class GeminiNotConfigured(RuntimeError):
     pass
 
 
+def vertex_credentials_path() -> Path | None:
+    """The service-account JSON from GOOGLE_APPLICATION_CREDENTIALS (relative paths resolve from the repo root)."""
+    if not (raw := os.getenv("GOOGLE_APPLICATION_CREDENTIALS")):
+        return None
+    path = Path(raw) if Path(raw).is_absolute() else ROOT / raw
+    return path if path.is_file() else None
+
+
+def use_vertex() -> bool:
+    """GEMINI_BACKEND = auto | vertex | api_key. auto prefers Vertex when service-account credentials are configured."""
+    backend = (os.getenv("GEMINI_BACKEND") or "auto").strip().lower()
+    if backend not in ("auto", "vertex", "api_key"):
+        raise ValueError(f"GEMINI_BACKEND '{backend}' is not valid. Use auto, vertex or api_key.")
+    return backend == "vertex" or (backend == "auto" and vertex_credentials_path() is not None)
+
+
 def gemini_available() -> bool:
-    return bool(os.getenv("GEMINI_API_KEY"))
+    return vertex_credentials_path() is not None if use_vertex() else bool(os.getenv("GEMINI_API_KEY"))
 
 
 def model_name() -> str:
     return os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
 
 
+def _make_vertex_client() -> genai.Client:
+    from google.oauth2 import service_account
+
+    if not (path := vertex_credentials_path()):
+        raise GeminiNotConfigured("GOOGLE_APPLICATION_CREDENTIALS does not point to a service-account JSON file.")
+    creds = service_account.Credentials.from_service_account_file(
+        str(path), scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or json.loads(path.read_text(encoding="utf-8"))["project_id"]
+    return genai.Client(vertexai=True, project=project, location=os.getenv("GOOGLE_CLOUD_LOCATION") or "global",
+                        credentials=creds)
+
+
 def make_client() -> genai.Client:
+    if use_vertex():
+        return _make_vertex_client()
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise GeminiNotConfigured("GEMINI_API_KEY is not set. Add it to your .env file.")

@@ -62,3 +62,48 @@ def test_approve_then_reject(client, tracker):
 def test_unknown_job_is_404(client):
     assert client.get("/api/jobs/missing").status_code == 404
     assert client.post("/api/jobs/missing/approve").status_code == 404
+
+
+def test_browser_frame_is_204_when_no_browser(client):
+    assert client.get("/api/browser/status").json() == {"active": False}
+    assert client.get("/api/browser/frame").status_code == 204
+
+
+def test_browser_ws_rejects_foreign_origin(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/api/browser/ws", headers={"origin": "http://evil.example"}):
+            pass
+
+
+def test_browser_ws_idle_without_browser(client):
+    with client.websocket_connect("/api/browser/ws", headers={"origin": "http://localhost:5173"}) as ws:
+        assert ws.receive_json() == {"type": "idle"}
+
+
+def test_login_start_reports_state_and_hides_password(client, monkeypatch):
+    import asyncio
+
+    from job_copilot.portals import naukri
+
+    seen = {}
+
+    async def fake_login(creds, finished, on_state, timeout=300):
+        seen["creds"] = creds
+        on_state("logged_in", "Logged in.")
+        return True
+
+    monkeypatch.setattr(naukri, "interactive_login", fake_login)
+    body = {"email": "me@example.com", "password": "s3cret"}
+    r = client.post("/api/login/naukri", json=body)
+    assert r.status_code == 200
+    assert "s3cret" not in r.text
+    assert client.get("/api/login/naukri").json()["state"] in ("running", "logged_in")
+
+
+def test_search_refused_while_login_running(client, monkeypatch):
+    from backend.routers import login
+
+    monkeypatch.setattr(login, "is_running", lambda: True)
+    assert client.post("/api/search", json={"source": "sample", "limit": 1}).status_code == 409

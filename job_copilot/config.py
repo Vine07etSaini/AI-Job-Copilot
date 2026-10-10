@@ -33,7 +33,7 @@ load_dotenv(ROOT / ".env")
 
 
 def ensure_dirs() -> None:
-    for d in (RESUMES_DIR, REPORTS_DIR, BROWSER_DIR):
+    for d in (RESUMES_DIR, REPORTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 

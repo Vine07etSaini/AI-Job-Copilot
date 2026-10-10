@@ -1,0 +1,117 @@
+<title>Job Copilot Mindmap</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one radial-style mindmap (core in the middle, flow on the right, guardrails/data on the left), then a short "how it connects" strip */
+:root {
+  --bg: #f6f7f9; --fg: #1b2330; --muted: #5d6877; --panel: #ffffff; --line: #c9d0da;
+  --c1: #1d6fd1; --c2: #7a4bd6; --c3: #0f8a72; --c4: #c2610f; --c5: #b3305a; --c6: #3f7d1f; --c7: #826a00; --c8: #0b7f9c; --c9: #d1380f;
+  --display: "Fraunces", Georgia, serif; --body: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121820; --fg: #e6ebf2; --muted: #98a3b3; --panel: #1a222d; --line: #3a4656;
+  --c1: #5aa2f5; --c2: #a98af0; --c3: #3ccaa8; --c4: #f0974a; --c5: #ef7aa0; --c6: #8fcf5f; --c7: #dcc24a; --c8: #4cc3e2; --c9: #ff7a55; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121820; --fg: #e6ebf2; --muted: #98a3b3; --panel: #1a222d; --line: #3a4656;
+  --c1: #5aa2f5; --c2: #a98af0; --c3: #3ccaa8; --c4: #f0974a; --c5: #ef7aa0; --c6: #8fcf5f; --c7: #dcc24a; --c8: #4cc3e2; --c9: #ff7a55; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); padding-inline: 16px; padding-block: 28px 48px; }
+.wrap { max-width: 1200px; margin-inline: auto; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-family: var(--display); font-size: 2rem; margin: 0; text-wrap: balance; }
+.lede { color: var(--muted); margin: 6px 0 0; max-width: 68ch; line-height: 1.5; font-size: 0.95rem; }
+.scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+svg { display: block; min-width: 980px; width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+figure { margin: 0; }
+.flows { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.flow { min-width: 0; padding: 14px 16px; border-top: 3px solid var(--c); background: var(--panel); border-radius: 0 0 8px 8px; }
+.flow h3 { margin: 0 0 6px; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c); }
+.flow p { margin: 0; font-size: 0.88rem; line-height: 1.5; }
+.flow code { font-family: var(--mono); font-size: 0.78rem; }
+h2 { font-family: var(--display); font-size: 1.2rem; margin: 0 0 12px; }
+/* svg text */
+.core text { fill: #fff; }
+.node rect.b { fill: var(--c); }
+.node text { fill: #fff; font-weight: 600; font-size: 13px; font-family: var(--body); }
+.leaf rect { fill: none; stroke: var(--c); stroke-width: 1.2; }
+.leaf text { fill: var(--fg); font-size: 12px; font-family: var(--body); }
+.link { fill: none; stroke: var(--c); stroke-width: 1.6; opacity: 0.7; }
+.k1 { --c: var(--c1); } .k2 { --c: var(--c2); } .k3 { --c: var(--c3); } .k4 { --c: var(--c4); } .k5 { --c: var(--c5); }
+.k6 { --c: var(--c6); } .k7 { --c: var(--c7); } .k8 { --c: var(--c8); } .k9 { --c: var(--c9); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>AI Job Copilot, end to end</h1>
+    <p class="lede">The core pipeline sits in the middle. Entry points, graphs, agents and portals run along the right. Objectives, guardrails, models, config and storage support it from the left.</p>
+  </header>
+
+  <figure>
+    <div class="scroll"><svg id="map" role="img" aria-label="Mindmap of AI Job Copilot: objectives, safety, LLM providers, configuration and persistence on the left; entry points, LangGraph pipelines, agents and portals on the right"></svg></div>
+    <figcaption>Every box maps to a file or concept in the repo. Scroll sideways on a phone.</figcaption>
+  </figure>
+
+  <section>
+    <h2>How the parts connect</h2>
+    <div class="flows">
+      <div class="flow" style="--c: var(--c2)"><h3>Search to PDF</h3><p><code>discover</code> asks a Portal to search, skips blacklisted or known jobs, fetches details, then runs <code>POSTING_GRAPH</code>: analyze, score, tailor, Honesty Guard, render PDF, save to the tracker.</p></div>
+      <div class="flow" style="--c: var(--c5)"><h3>Honesty first</h3><p>The LLM only proposes. <code>guard()</code> checks every proposal against the <code>SkillBank</code> built from <code>profile.yaml</code> and reverts anything unverified.</p></div>
+      <div class="flow" style="--c: var(--c4)"><h3>Review, then apply</h3><p>Jobs land as <code>PENDING_REVIEW</code>. Approved jobs go through <code>APPLY_GRAPH</code>, which enforces daily and per-portal caps before the portal's <code>apply</code> runs.</p></div>
+      <div class="flow" style="--c: var(--c1)"><h3>One engine, many doors</h3><p>CLI, MCP tools, the Gemini chat agent and the FastAPI backend all call the same async pipeline functions. The React UI talks to FastAPI.</p></div>
+      <div class="flow" style="--c: var(--c3)"><h3>Works without a model</h3><p>With no provider configured, agents get <code>llm=None</code> and use heuristics. That is why <code>--source sample</code> and the tests run offline.</p></div>
+      <div class="flow" style="--c: var(--c9)"><h3>Daily loop</h3><p><code>DAILY_GRAPH</code> runs discover, applies only in auto mode, then builds the Excel report and emails it over SMTP.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+// [group title, colour class, side, leaves]
+var G = [
+  ["Objectives", "k9", "L", ["Find fresh, relevant jobs daily", "Score each posting against profile", "Tailor one resume PDF per job", "Never invent skills or experience", "Apply in review or auto mode", "Email a daily Excel report"]],
+  ["Honesty Guard", "k5", "L", ["guard() on every tailored output", "Drops skills not in SkillBank", "Reverts unverified JD keywords", "Rewrites on_resume projects only", "Experience, education read-only", "CUA: naukri.com only, step cap"]],
+  ["LLM layer", "k2", "L", ["llm/factory.get_llm() picks provider", "Gemini API key or Vertex AI", "Groq and Ollama (chat completions)", "none: heuristic fallback", "chat / ask and CUA: Gemini only"]],
+  ["Config", "k7", "L", ["profile.yaml: single source of truth", "settings.yaml: validated Settings", ".env: keys, portal login, SMTP", "import-resume drafts profile from PDF"]],
+  ["Persistence & output", "k8", "L", ["db.py Tracker: SQLite jobs table", "Job id = sha1(portal:external_id)", "Fingerprint dedupe across portals", "storage/resumes: PDF + vault JSON", "Excel report + SMTP email"]],
+  ["Entry points", "k1", "R", ["main.py to Typer CLI (cli.py)", "mcp_server.py: MCP tools over stdio", "gemini_agent.py spawns MCP server", "backend: FastAPI on :8000", "frontend: React + Zustand on :5173"]],
+  ["Pipeline (LangGraph)", "k4", "R", ["POSTING: analyze, score, tailor, render", "DISCOVER: search, pick, fetch, process", "APPLY: plan, then apply per portal", "DAILY: discover, apply, report", "Nodes return updates, never mutate"]],
+  ["Agents", "k3", "R", ["jd_analyzer: JD to structured analysis", "matcher: score using SkillBank", "resume_builder: tailor and reorder", "screening: answers from profile facts", "cua.py: computer-use for drawers", "profile_importer: resume to profile"]],
+  ["Portals", "k6", "R", ["base.Portal: search, fetch_details, apply", "naukri: Playwright, persistent session", "sample: offline data/sample_jobs.json", "Auto-login once per session on Apply", "PortalBlocked on captcha or denial"]]
+];
+var W = 1400, CX = 700, ROWH = 30, GAP = 22, PAD = 40, BW = 168, LW = 270;
+var BX = 262, LX = 386; // distance from centre to branch centre / leaf near edge
+function sideLayout(side) {
+  var gs = G.filter(function (g) { return g[2] === side; }), y = PAD, out = [];
+  gs.forEach(function (g) {
+    var h = g[3].length * ROWH; out.push({ g: g, y0: y, h: h, yc: y + h / 2 }); y += h + GAP;
+  });
+  return { items: out, total: y - GAP + PAD };
+}
+var L = sideLayout("L"), R = sideLayout("R");
+var H = Math.max(L.total, R.total), CY = H / 2;
+// shift each side so it is vertically centred
+function shift(s) { var d = (H - s.total) / 2; s.items.forEach(function (i) { i.y0 += d; i.yc += d; }); }
+shift(L); shift(R);
+var svg = "";
+function curve(x1, y1, x2, y2) { var m = (x1 + x2) / 2; return "M" + x1 + " " + y1 + " C" + m + " " + y1 + " " + m + " " + y2 + " " + x2 + " " + y2; }
+[L, R].forEach(function (S, si) {
+  var dir = si === 0 ? -1 : 1;
+  S.items.forEach(function (it) {
+    var bx = CX + dir * BX, by = it.yc, cls = it.g[1];
+    // centre -> branch
+    svg += '<g class="' + cls + '"><path class="link" style="stroke-width:3" d="' + curve(CX + dir * 120, CY, bx - dir * BW / 2, by) + '"/>';
+    it.g[3].forEach(function (t, i) {
+      var ly = it.y0 + i * ROWH + ROWH / 2;
+      var lx = dir > 0 ? CX + LX : CX - LX - LW;
+      var edge = dir > 0 ? lx : lx + LW;
+      svg += '<path class="link" d="' + curve(bx + dir * BW / 2, by, edge, ly) + '"/>';
+      svg += '<g class="leaf"><rect x="' + lx + '" y="' + (ly - 11) + '" width="' + LW + '" height="22" rx="5"/><text x="' + (lx + 10) + '" y="' + (ly + 4) + '">' + t.replace(/&/g, "&amp;") + '</text></g>';
+    });
+    svg += '<g class="node"><rect class="b" x="' + (bx - BW / 2) + '" y="' + (by - 17) + '" width="' + BW + '" height="34" rx="17"/><text x="' + bx + '" y="' + (by + 4.5) + '" text-anchor="middle">' + it.g[0].replace(/&/g, "&amp;") + '</text></g></g>';
+  });
+});
+svg += '<g class="core"><rect x="' + (CX - 120) + '" y="' + (CY - 46) + '" width="240" height="92" rx="20" fill="#16324f"/>' +
+  '<text x="' + CX + '" y="' + (CY - 6) + '" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-size="21" font-weight="600">AI Job Copilot</text>' +
+  '<text x="' + CX + '" y="' + (CY + 16) + '" text-anchor="middle" font-size="12" opacity="0.85">search · score · tailor · apply · report</text>' +
+  '<text x="' + CX + '" y="' + (CY + 33) + '" text-anchor="middle" font-size="11" opacity="0.7" font-family="IBM Plex Mono, monospace">Python · Playwright · LangGraph</text></g>';
+var el = document.getElementById("map");
+el.setAttribute("viewBox", "0 0 " + W + " " + H);
+el.innerHTML = svg;
+</script>

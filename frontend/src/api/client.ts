@@ -1,4 +1,4 @@
-import type { JobDetail, JobStatus, JobSummary, Profile, SkillGaps, Stats } from "./types";
+import type { JobDetail, JobStatus, JobSummary, LoginStatus, Profile, SkillGaps, Stats } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -32,5 +32,9 @@ export const api = {
   search: (source: string, limit: number) => post<Record<string, number>>("/search", { source, limit }),
   apply: (max_count: number) => post<Record<string, number>>("/apply", { max_count }),
   skillGaps: () => request<SkillGaps>("/skill-gaps"),
+  loginStatus: () => request<LoginStatus>("/login/naukri"),
+  loginStart: (email?: string, password?: string) => post<LoginStatus>("/login/naukri", { email, password }),
+  loginDone: () => post<LoginStatus>("/login/naukri/done"),
+  browserActive: () => request<{ active: boolean }>("/browser/status"),
   profile: () => request<Profile>("/profile"),
 };

@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import BrowserView from "./components/BrowserView";
+import LoginPanel from "./components/LoginPanel";
 import ActionsBar from "./components/ActionsBar";
 import JobDetailPane from "./components/JobDetailPane";
 import JobList from "./components/JobList";
@@ -18,8 +20,12 @@ export default function App() {
     <div className="app">
       <header>
         <h1>AI Job Copilot</h1>
-        <ActionsBar />
+        <div className="actions">
+          <LoginPanel />
+          <ActionsBar />
+        </div>
       </header>
+      <BrowserView />
       <StatusTabs />
       <main>
         <JobList />

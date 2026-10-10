@@ -66,3 +66,16 @@ aside ul { padding-left: 18px; margin: 0; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
 .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 10px; cursor: pointer; }
 .toast.error { background: var(--bad); color: #fff; }
+
+.browser-view { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 16px; }
+.browser-view h3 { margin: 0 0 8px; font-size: 1rem; }
+.browser-view img { width: 100%; max-height: 60vh; object-fit: contain; border-radius: 8px; background: #000; }
+.browser-view-head { display: flex; justify-content: space-between; align-items: center; }
+.browser-view-head label { font-size: .9rem; cursor: pointer; }
+.browser-screen { outline: none; line-height: 0; }
+.browser-screen.controlling { cursor: crosshair; outline: 2px solid var(--accent, #c96442); border-radius: 8px; }
+
+.login-panel { position: relative; }
+.login-form { position: absolute; right: 0; top: 110%; z-index: 5; width: 280px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+.login-buttons { display: flex; gap: 8px; }

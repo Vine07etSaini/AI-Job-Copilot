@@ -369,7 +369,7 @@ def test_groq_key_validation(monkeypatch):
 # ---------- LLM provider selection and chat client (mock HTTP: offline) ----------
 
 def _clear_llm_env(monkeypatch):
-    for k in ("LLM_PROVIDER", "GEMINI_API_KEY", "GROQ_API_KEY", "OLLAMA_MODEL"):
+    for k in ("LLM_PROVIDER", "GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GROQ_API_KEY", "OLLAMA_MODEL"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -439,3 +439,95 @@ def test_chat_llm_honours_retry_after_and_email_failure_is_not_fatal(monkeypatch
     monkeypatch.setattr(emailer.smtplib, "SMTP", Boom)
     cfg = emailer.EmailConfig(host="h", port=587, user="u", password="p", to="t")
     assert emailer.send_email("s", "b", cfg=cfg) is False
+
+
+def test_gemini_backend_selection(monkeypatch, tmp_path):
+    from job_copilot.llm import gemini
+
+    key = tmp_path / "sa.json"
+    key.write_text("{}")
+    for k in ("GEMINI_BACKEND", "GOOGLE_APPLICATION_CREDENTIALS", "GEMINI_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    assert not gemini.use_vertex() and not gemini.gemini_available()
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert gemini.gemini_available() and not gemini.use_vertex()
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+    assert gemini.use_vertex() and gemini.gemini_available()          # auto prefers Vertex
+    monkeypatch.setenv("GEMINI_BACKEND", "api_key")
+    assert not gemini.use_vertex()
+    monkeypatch.setenv("GEMINI_BACKEND", "bogus")
+    with pytest.raises(ValueError):
+        gemini.use_vertex()
+
+
+# ---------------------------------------------------------------- email report sending
+
+class FakeSMTP:
+    """Records what the emailer does instead of opening a network connection."""
+    instances = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host, self.port, self.calls, self.sent = host, port, [], None
+        FakeSMTP.instances.append(self)
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def starttls(self): self.calls.append("starttls")
+    def login(self, user, password): self.calls.append(("login", user, password))
+    def send_message(self, msg): self.sent = msg
+
+
+def test_send_email_builds_message_with_attachment(monkeypatch, tmp_path):
+    from job_copilot.agents import emailer
+
+    FakeSMTP.instances.clear()
+    monkeypatch.setattr(emailer.smtplib, "SMTP", FakeSMTP)
+    report = tmp_path / "report.xlsx"
+    report.write_bytes(b"xlsx-bytes")
+    cfg = emailer.EmailConfig(host="smtp.test", port=587, user="me@test", password="pw", to="you@test")
+
+    assert emailer.send_email("Daily", "body text", [report], cfg=cfg) is True
+
+    smtp = FakeSMTP.instances[0]
+    assert (smtp.host, smtp.port) == ("smtp.test", 587)
+    assert smtp.calls == ["starttls", ("login", "me@test", "pw")]    # TLS before credentials
+    msg = smtp.sent
+    assert (msg["From"], msg["To"], msg["Subject"]) == ("me@test", "you@test", "Daily")
+    attachment = next(msg.iter_attachments())
+    assert attachment.get_filename() == "report.xlsx" and attachment.get_content() == b"xlsx-bytes"
+
+
+def test_send_email_to_override_and_unconfigured_skips(monkeypatch):
+    from job_copilot.agents import emailer
+
+    FakeSMTP.instances.clear()
+    monkeypatch.setattr(emailer.smtplib, "SMTP", FakeSMTP)
+    cfg = emailer.EmailConfig(host="h", port=587, user="u", password="p", to="default@test")
+    assert emailer.send_email("s", "b", cfg=cfg, to="other@test") is True
+    assert FakeSMTP.instances[0].sent["To"] == "other@test"
+
+    FakeSMTP.instances.clear()
+    empty = emailer.EmailConfig(host="h", port=587, user="", password="", to="")
+    assert emailer.send_email("s", "b", cfg=empty) is False
+    assert FakeSMTP.instances == []                                  # never even connects
+
+
+def test_daily_report_emails_only_when_enabled(temp_pipeline, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    pipeline = temp_pipeline
+    report = tmp_path / "r.xlsx"
+    report.write_bytes(b"x")
+    sent = []
+    monkeypatch.setattr(pipeline.reporter, "build_report", lambda jobs: report)
+    monkeypatch.setattr(pipeline.emailer, "send_email", lambda subject, body, files: sent.append((subject, files)) or True)
+
+    monkeypatch.setattr(pipeline, "get_settings", lambda: SimpleNamespace(send_daily_report=True))
+    out = pipeline.daily_report(send=True)
+    assert out["emailed"] is True and sent[0][1] == [report] and sent[0][0].startswith("Job Copilot daily report")
+
+    sent.clear()
+    assert pipeline.daily_report(send=False)["emailed"] is False     # --no-email
+    monkeypatch.setattr(pipeline, "get_settings", lambda: SimpleNamespace(send_daily_report=False))
+    assert pipeline.daily_report(send=True)["emailed"] is False      # disabled in settings
+    assert sent == []

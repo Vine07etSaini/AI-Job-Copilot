@@ -105,7 +105,11 @@ class ScoreWeights(BaseModel):
 
 class PortalSettings(BaseModel):
     enabled: bool = True
-    headless: bool = False
+    cdp_url: str = "http://127.0.0.1:9222"  # Chrome remote-debugging endpoint the portal attaches to
+    close_chrome_on_finish: bool = True  # quit the debug Chrome when a run ends; it restarts on demand
+    headless: bool = False  # (unused while attached) True = no window; Naukri blocks this
+    hide_window: bool = True  # headed but parked off-screen; watch it in the web UI live view
+    browser_channel: str = "chrome"  # installed Chrome; "" = bundled Chromium
     pages_per_search: int = 2
     min_delay_seconds: float = 3
     max_delay_seconds: float = 7

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.routers import actions, jobs, profile
+from backend.routers import actions, browser, jobs, login, profile
 from job_copilot.config import setup_logging
 
 setup_logging()
@@ -23,6 +23,8 @@ app.add_middleware(
 app.include_router(jobs.router)
 app.include_router(actions.router)
 app.include_router(profile.router)
+app.include_router(browser.router)
+app.include_router(login.router)
 
 
 @app.get("/api/health", tags=["meta"])

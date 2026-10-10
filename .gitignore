@@ -12,6 +12,14 @@ config/profile.yaml.bak
 .claude/
 CLAUDE.md
 CLAUDE.local.md
+skills-lock.json
 
 # Personal learning notes
 LEARNING.md
+
+# Credentials
+secrets/
+
+# Third-party skill (installed with npx skills add)
+.agents/
+.claude/skills/security-audit

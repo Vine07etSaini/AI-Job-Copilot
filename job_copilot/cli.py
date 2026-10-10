@@ -194,6 +194,17 @@ def login(portal: str = typer.Argument("naukri")) -> None:
     console.print(f"Session saved ({how}).")
 
 
+@app.command()
+def chrome() -> None:
+    """Start the debug Chrome the Naukri portal attaches to (log in to Naukri in it once)."""
+    from job_copilot.config import get_settings
+    from job_copilot.portals.chrome_debug import ensure_chrome
+
+    url = get_settings().portals["naukri"].cdp_url
+    started = ensure_chrome(url)
+    console.print(f"Chrome {'started' if started else 'already running'} on {url}.")
+
+
 @app.command("import-resume")
 def import_resume(
     pdf: Path = typer.Argument(None, help="Path to your resume PDF (omit together with --apply)"),

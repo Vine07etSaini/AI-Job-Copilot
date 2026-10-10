@@ -69,3 +69,8 @@ export interface Profile {
   learning_goals: string[];
   projects: { id: string; name: string; tech: string[]; on_resume: boolean; description: string }[];
 }
+
+export interface LoginStatus {
+  state: "idle" | "running" | "waiting" | "logged_in" | "failed";
+  message: string;
+}

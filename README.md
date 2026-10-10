@@ -178,7 +178,7 @@ flowchart TD
 | Email | Gmail API / SMTP |
 | Reports | openpyxl / pandas |
 | Backend API | FastAPI (REST + SSE for live agent logs) |
-| UI / Approvals | Web UI Review Queue (Streamlit for MVP, Next.js later) |
+| UI / Approvals | Web UI Review Queue (Streamlit for MVP, React.js later) |
 | Email | Approval requests (signed one-time links), daily report, critical alerts |
 
 ## 📁 Suggested Project Structure

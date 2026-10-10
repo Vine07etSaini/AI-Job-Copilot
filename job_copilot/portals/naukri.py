@@ -20,10 +20,12 @@ from job_copilot.agents.freshness import parse_posted
 from job_copilot.agents.cua import run_cua
 from job_copilot.agents.screening import answer_question
 from job_copilot.agents.skill_bank import SkillBank
-from job_copilot.config import BROWSER_DIR, STORAGE_DIR, get_portal_credentials, get_profile, get_settings
+from job_copilot.config import PortalCredentials, STORAGE_DIR, get_portal_credentials, get_profile, get_settings
 from job_copilot.llm.gemini import gemini_available
-from job_copilot.models import JobPosting, JobStatus
+from job_copilot.models import JobPosting, JobStatus, PortalSettings
+from job_copilot.portals import live_view
 from job_copilot.portals.base import Portal, PortalBlocked
+from job_copilot.portals.chrome_debug import ensure_chrome, hide_from_taskbar, keep_awake
 
 log = logging.getLogger(__name__)
 
@@ -103,23 +105,103 @@ class NaukriPortal(Portal):
     name = "naukri"
 
     async def open(self) -> None:
+        """Attach to a normal Chrome over CDP (started on demand); it is a real, visible browser, not a launched one."""
         self._login_attempted = False
-        BROWSER_DIR.mkdir(parents=True, exist_ok=True)
+        cdp_url = self.settings.cdp_url
+        # Blocking subprocess/HTTP polling, so keep it off the event loop.
+        await asyncio.to_thread(ensure_chrome, cdp_url)
+        keep_awake(True)  # same thread (the event loop) as close(), which the API requires
         self._pw = await async_playwright().start()
-        self.ctx: BrowserContext = await self._pw.chromium.launch_persistent_context(
-            str(BROWSER_DIR / "naukri"),
-            headless=self.settings.headless,
-            viewport={"width": 1366, "height": 860},
-            locale="en-IN",
-            timezone_id="Asia/Kolkata",
-        )
-        self.page: Page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
+        self.browser = await self._pw.chromium.connect_over_cdp(cdp_url)
+        if self.browser.contexts:
+            self.ctx: BrowserContext = self.browser.contexts[0]  # the default context holds the saved Naukri login
+        else:  # unexpected Chrome state: a fresh context has no saved login, so say so instead of failing with IndexError
+            log.warning("Chrome exposed no default browser context; using a new one (the saved Naukri login will not apply)")
+            self.ctx = await self.browser.new_context()
+        # Our own tab, so the user's other tabs are left alone.
+        self.page: Page = await self.ctx.new_page()
+        hide_from_taskbar(cdp_url)  # new windows get their own taskbar button, so do it after opening our tab
+        live_view.set_page(self.page)
 
     async def close(self) -> None:
-        if getattr(self, "ctx", None):
-            await self.ctx.close()
+        """Close our tab, then the debug Chrome itself unless `close_chrome_on_finish` is off (it restarts on demand)."""
+        live_view.set_page(None)
+        keep_awake(False)
+        if getattr(self, "page", None) and not self.page.is_closed():
+            await self.page.close()
+        if self.settings.close_chrome_on_finish and getattr(self, "browser", None):
+            try:  # clean shutdown through CDP, so the profile (login cookies) is flushed to disk
+                await (await self.browser.new_browser_cdp_session()).send("Browser.close")
+            except Exception as e:  # already gone or refused: nothing more to do
+                log.debug("Could not close Chrome: %s", e)
         if getattr(self, "_pw", None):
-            await self._pw.stop()
+            await self._pw.stop()  # disconnects from Chrome
+
+    # ---- Previous implementation (Playwright launches its own Chrome/Chromium); kept for reference ----
+    # async def open(self) -> None:
+    #     self._login_attempted = False
+    #     BROWSER_DIR.mkdir(parents=True, exist_ok=True)
+    #     self._pw = await async_playwright().start()
+    #     args = list(LEAN_PROFILE_ARGS)
+    #     if self.settings.hide_window and not self.settings.headless:
+    #         # Still a real headed window (Naukri allows it), just parked off-screen; the web UI live view shows it.
+    #         args.append("--window-position=-32000,-32000")
+    #     options = dict(
+    #         headless=self.settings.headless,
+    #         viewport={"width": 1466, "height": 860},
+    #         locale="en-IN",
+    #         timezone_id="Asia/Kolkata",
+    #         args=args,
+    #     )
+    #     path = str(BROWSER_DIR / "naukri")
+    #     try:
+    #         # The installed Chrome looks like a normal user's browser; the bundled Chromium is easier to flag.
+    #         self.ctx: BrowserContext = await self._pw.chromium.launch_persistent_context(
+    #             path, channel=self.settings.browser_channel or None, **options)
+    #     except PWError as e:
+    #         if not self.settings.browser_channel:
+    #             raise
+    #         log.warning("Browser channel '%s' unavailable (%s); using bundled Chromium", self.settings.browser_channel, str(e).splitlines()[0])
+    #         self.ctx = await self._pw.chromium.launch_persistent_context(path, **options)
+    #     self.page: Page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
+    #     live_view.set_page(self.page)
+    #
+    # async def close(self) -> None:
+    #     live_view.set_page(None)
+    #     if getattr(self, "ctx", None):
+    #         await self.ctx.close()
+    #         prune_profile(BROWSER_DIR / "naukri")
+    #     if getattr(self, "_pw", None):
+    #         await self._pw.stop()
+    #
+    # Helpers the old implementation used (module-level in the original file):
+    # # Keep storage/browser/naukri small: only cookies and site storage matter for the login session.
+    # LEAN_PROFILE_ARGS = [
+    #     "--disk-cache-size=1", "--media-cache-size=1", "--disable-gpu-shader-disk-cache",
+    #     "--disable-background-networking", "--disable-component-update", "--disable-sync",
+    #     "--disable-breakpad", "--no-first-run", "--no-default-browser-check", "--password-store=basic",
+    # ]
+    #
+    # # What must survive between runs: cookies, site storage and the key (Local State) that decrypts the cookies.
+    # PROFILE_KEEP = {"Local State": None, "Default": {"Network", "Local Storage", "IndexedDB", "Session Storage",
+    #                                                   "WebStorage", "Preferences", "Secure Preferences"}}
+    #
+    # def prune_profile(profile: Path) -> None:
+    #     """Delete everything in the Chromium profile that the login session does not need (caches, history, logs)."""
+    #     for entry in profile.iterdir() if profile.is_dir() else []:
+    #         if entry.name not in PROFILE_KEEP:
+    #             _remove(entry)
+    #         elif PROFILE_KEEP[entry.name] and entry.is_dir():
+    #             for child in entry.iterdir():
+    #                 if child.name not in PROFILE_KEEP[entry.name]:
+    #                     _remove(child)
+    #
+    #
+    # def _remove(path: Path) -> None:
+    #     try:
+    #         shutil.rmtree(path) if path.is_dir() else path.unlink()
+    #     except OSError as e:  # a file still locked by Chromium is harmless; it is removed on the next run
+    #         log.debug("Could not remove %s: %s", path, e)
 
     async def _goto(self, url: str) -> None:
         await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -176,12 +258,12 @@ class NaukriPortal(Portal):
 
     # ------------------------------------------------------------ login
 
-    async def login(self) -> tuple[bool, str]:
-        """Sign in with the .env credentials; tried once per session so a bad password can't lock the account."""
+    async def login(self, creds: PortalCredentials | None = None) -> tuple[bool, str]:
+        """Sign in with `creds` (else the .env credentials); tried once per session so a bad password can't lock the account."""
         if self._login_attempted:
             return False, "automatic login was already tried in this session"
         self._login_attempted = True
-        creds = get_portal_credentials(self.name)
+        creds = creds or get_portal_credentials(self.name)
         if not creds.configured:
             return False, "set NAUKRI_EMAIL and NAUKRI_PASSWORD in .env, or run: python main.py login naukri"
 
@@ -206,6 +288,12 @@ class NaukriPortal(Portal):
         log.info("Logged in to Naukri as %s", creds.user)
         await self.pause()
         return True, "logged in"
+
+    async def is_logged_in(self) -> bool:
+        """The home page title says 'Mynaukri' only for a signed-in user."""
+        await self._goto(BASE)
+        await self.page.wait_for_load_state("load")
+        return "mynaukri" in (await self.page.title()).lower()
 
     # ------------------------------------------------------------ apply
 
@@ -293,7 +381,7 @@ async def login_session() -> str:
     """Sign in automatically if possible, else let the user sign in by hand; the session is saved in storage/browser."""
     from job_copilot.models import PortalSettings
 
-    async with NaukriPortal(PortalSettings(headless=False)) as portal:
+    async with NaukriPortal(PortalSettings()) as portal:
         try:
             ok, reason = await portal.login()
         except PortalBlocked as e:
@@ -305,3 +393,39 @@ async def login_session() -> str:
             await portal.page.goto(LOGIN_URL)
         await asyncio.to_thread(input, "Log in to Naukri in the opened browser window, then press Enter here... ")
         return "manual login"
+
+
+async def interactive_login(creds: PortalCredentials | None, finished: asyncio.Event, on_state, timeout: int = 300) -> bool:
+    """Open the login page for the user. Try `creds` once if given, else wait while the user signs in by hand
+    (through the web UI's live view). `on_state(state, message)` reports progress; `finished` ends the wait early."""
+    async with NaukriPortal(PortalSettings()) as portal:
+        try:
+            await portal._goto(LOGIN_URL)
+            if "nlogin" not in portal.page.url:
+                on_state("logged_in", "Already logged in.")
+                return True
+            if creds is not None:
+                on_state("running", "Signing in with the details you entered...")
+                ok, reason = await portal.login(creds)
+                if ok:
+                    on_state("logged_in", "Logged in.")
+                    return True
+                on_state("waiting", f"{reason}. Finish logging in using the live view (tick 'Take control').")
+                if "nlogin" not in portal.page.url:
+                    await portal._goto(LOGIN_URL)
+            else:
+                on_state("waiting", "Log in using the live view (tick 'Take control'), then press Done.")
+            deadline = asyncio.get_running_loop().time() + timeout
+            while "nlogin" in portal.page.url and not finished.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    on_state("failed", "Timed out waiting for the login.")
+                    return False
+                await asyncio.sleep(2)
+            if await portal.is_logged_in():
+                on_state("logged_in", "Logged in. The session is saved.")
+                return True
+            on_state("failed", "Not logged in. Try again.")
+            return False
+        except PortalBlocked as e:
+            on_state("failed", str(e))
+            return False

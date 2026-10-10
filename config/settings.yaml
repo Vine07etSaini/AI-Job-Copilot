@@ -24,7 +24,11 @@ max_keyword_repeats: 2          # keyword-stuffing limit per project description
 portals:
   naukri:
     enabled: true
-    headless: false             # Naukri often blocks headless browsers
+    cdp_url: http://127.0.0.1:9222  # attach to a normal Chrome (started automatically; profile in storage/chrome-profile)
+    close_chrome_on_finish: true   # quit the debug Chrome after each run (login is kept in its profile)
+    headless: false             # true = no window at all; Naukri blocks it (access denied)
+    hide_window: true           # headed but off-screen; watch it in the web UI live view. false = visible window
+    browser_channel: chrome     # installed Chrome (less bot-like); "" = bundled Chromium
     pages_per_search: 2
     min_delay_seconds: 3        # human-like pacing between page loads
     max_delay_seconds: 7

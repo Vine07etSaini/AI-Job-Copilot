@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.deps import get_tracker
+from backend.routers import login
 from backend.schemas import AnalyzeRequest, ApplyRequest, SearchRequest, SkillGapResponse
 from job_copilot import pipeline
 from job_copilot.agents.jd_analyzer import analyze_jd
@@ -22,15 +23,22 @@ router = APIRouter(prefix="/api", tags=["actions"])
 TrackerDep = Annotated[Tracker, Depends(get_tracker)]
 
 
+def _not_during_login() -> None:
+    if login.is_running():
+        raise HTTPException(409, "A Naukri login is in progress; finish it first.")
+
+
 @router.post("/search")
 async def run_search(body: SearchRequest) -> dict:
     """Search a portal, score postings and tailor resumes. 'naukri' can take several minutes."""
+    _not_during_login()
     return await pipeline.discover(body.source, body.limit)
 
 
 @router.post("/apply")
 async def apply_approved(body: ApplyRequest) -> dict:
     """Apply to approved jobs, respecting the daily and per-portal caps. Only call on explicit user action."""
+    _not_during_login()
     return await pipeline.apply_approved(body.max_count)
 
 
