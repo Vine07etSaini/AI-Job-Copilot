@@ -2,16 +2,33 @@
 match_threshold: 70             # only jobs scoring >= this get a tailored resume
 max_job_age_days: 7             # only jobs posted in the last 7 days
 skip_if_date_unknown: true      # skip postings with no parsable date
-score_weights:                  # must sum to 1.0
+forget_filtered_after_days: 14  # a job filtered out this long ago may be looked at again, so a re-posted role is not
+                                # blocked for ever. Keep this above max_job_age_days, or a job you just filtered comes
+                                # back next run and eats the page budget. 0 = never forget.
+score_weights:                  # relative weights; a part the JD says nothing about is left out, not counted as 100%
   mandatory_skills: 0.6
   nice_to_have_skills: 0.2
   experience: 0.2
+  role_floor: 0.5               # score multiplier when the title is outside your preferences.roles (1.0 = ignore titles)
+
+# ---------- Card triage (LLM) ----------
+# One LLM call per portal per run reads the search cards (title, company, tags) and re-ranks them before any job
+# page is opened, so a good job with an unusual title ("Platform Engineer - Python") is not missed. Without an LLM
+# provider configured this does nothing and the deterministic prescore order is used.
+triage: rank                    # off = prescore order only | rank = the model re-orders | filter = it may also drop
+triage_threshold: 40            # filter mode only: cards scored below this are never opened. An LLM's 0-100 is not
+                                # calibrated - read a few `-v` runs before trusting this number enough to use filter
+triage_max_cards: 60            # cards sent in that one call; the rest keep their prescore order behind them
 
 # ---------- Applying ----------
-mode: review                    # review = you approve each apply | auto = apply automatically
+# review = you approve every job | hybrid = auto-apply (with your Naukri resume) when your resume already shows the
+# job's key skills; only jobs that need a tailored resume wait for your review | auto = apply to every match
+mode: hybrid
 max_applications_per_day: 25
 per_portal_cap: 10
 max_jobs_per_run: 30            # max job pages opened per portal per run
+search_card_target: 120         # cards a portal tries to collect per run, shared across its role x location queries;
+                                # the max_jobs_per_run pages it opens are picked from these
 apply_engine: script            # script = selectors + rules | cua = Gemini computer-use agent handles the screening drawer
 cua_max_steps: 25               # hard cap on agent actions per application
 
@@ -20,15 +37,41 @@ locked_sections: [experience, education]
 editable_sections: [skills, projects]
 max_keyword_repeats: 2          # keyword-stuffing limit per project description
 
+# ---------- Privacy ----------
+redact_pii: true                # mask name, email, phone, address and links before any text is sent to an LLM
+
 # ---------- Portals ----------
 portals:
   naukri:
     enabled: true
     cdp_url: http://127.0.0.1:9222  # attach to a normal Chrome (started automatically; profile in storage/chrome-profile)
     close_chrome_on_finish: true   # quit the debug Chrome after each run (login is kept in its profile)
-    pages_per_search: 2
+    pages_per_search: 5         # most pages per role x location query; it stops earlier once the target is met
+    min_new_cards_per_page: 10  # a page adding fewer than this means Naukri has run out of results for the query
     min_delay_seconds: 3        # human-like pacing between page loads
     max_delay_seconds: 7
+  indeed:                       # same Chrome, profile and live view as Naukri; log in once with "Log in to Indeed"
+    enabled: true
+    base_url: https://in.indeed.com
+    cdp_url: http://127.0.0.1:9222
+    close_chrome_on_finish: true
+    pages_per_search: 5         # 10-15 jobs per page; it stops earlier once the target is met
+    min_new_cards_per_page: 5
+    min_delay_seconds: 4        # Indeed is quicker to show "verify you are human"; go slower
+    max_delay_seconds: 9
+    trust_search_age_filter: true  # Indeed often hides dates; its `fromage` search filter already limits job age
+  linkedin:                     # strictest about automation: slow, few, Easy Apply only; log in once with "Log in to LinkedIn"
+    enabled: true
+    cdp_url: http://127.0.0.1:9222
+    close_chrome_on_finish: true
+    pages_per_search: 2         # ~25 jobs per page. Do not raise this above 2: LinkedIn is the strictest site
+                                # here and a security checkpoint blocks the portal for the rest of the run
+    min_new_cards_per_page: 10
+    min_delay_seconds: 8
+    max_delay_seconds: 15
+    daily_cap: 5                # LinkedIn applications per day (also limited by per_portal_cap)
+    easy_apply_only: true       # only search jobs it can apply to in-site
+    trust_search_age_filter: true  # promoted cards show no date; the search's f_TPR filter already limits job age
 
 # ---------- Email ----------
 send_daily_report: true
@@ -36,3 +79,5 @@ email_each_resume: false        # also email every tailored resume to yourself
 send_recruiter_emails: draft_only
 
 blacklist_companies: []
+# Titles with any of these words are skipped before the job page is opened (whole words, any case).
+exclude_title_words: [senior, sr, lead, principal, staff, architect, manager, director, head]

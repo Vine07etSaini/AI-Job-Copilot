@@ -7,7 +7,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     experience_text  TEXT,
     salary_text      TEXT,
     posted_at        TEXT,
+    posted_text      TEXT,
     description      TEXT,
+    tags_json        TEXT,
     recruiter_email  TEXT,
     recruiter_phone  TEXT,
     analysis_json    TEXT,
@@ -46,7 +48,10 @@ CREATE INDEX IF NOT EXISTS idx_jobs_fingerprint ON jobs(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
 
-JSON_COLUMNS = ("analysis_json", "match_json", "guard_json")
+JSON_COLUMNS = ("analysis_json", "match_json", "guard_json", "tags_json")
+
+# Columns added after the first release: CREATE TABLE IF NOT EXISTS never adds one to an existing database.
+ADDED_COLUMNS = {"posted_text": "TEXT", "tags_json": "TEXT"}
 
 
 def now_iso() -> str:
@@ -66,12 +71,21 @@ def fingerprint(company: str, title: str) -> str:
     return hashlib.sha1(f"{_norm(company)}|{_norm(title)}".encode()).hexdigest()[:16]
 
 
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Bring an older database up to date; `CREATE TABLE IF NOT EXISTS` never adds a column to an existing table."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+    for name, decl in ADDED_COLUMNS.items():
+        if name not in have:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")  # names are constants, never user input
+
+
 class Tracker:
     def __init__(self, path: Path = DB_PATH):
         ensure_dirs()
         self.path = path
         with self._conn() as c:
             c.executescript(SCHEMA)
+            _add_missing_columns(c)
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -85,13 +99,24 @@ class Tracker:
 
     # ------------------------------------------------------------ writes
 
-    def is_known(self, posting: JobPosting) -> bool:
+    def is_known(self, posting: JobPosting, forget_filtered_after_days: int | None = None) -> bool:
+        """True when this posting, or the same company+title, is already in the tracker.
+
+        With `forget_filtered_after_days`, a `filtered_out` row stops blocking once it is that old, so a job
+        that was only skipped for its age can come back when it is re-posted. Every other status represents a
+        decision already made (applied, rejected, waiting for review), so it blocks for good.
+
+        Comparing `updated_at` as a string is sound only because every write goes through `now_iso()` at the
+        one fixed IST offset.
+        """
+        sql = "SELECT 1 FROM jobs WHERE (id = ? OR fingerprint = ?)"
+        args: list = [job_id(posting.portal, posting.external_id), fingerprint(posting.company, posting.title)]
+        if forget_filtered_after_days:
+            cutoff = datetime.now(IST) - timedelta(days=forget_filtered_after_days)
+            sql += " AND (status != ? OR updated_at >= ?)"
+            args += [str(JobStatus.FILTERED_OUT), cutoff.isoformat(timespec="seconds")]
         with self._conn() as c:
-            row = c.execute(
-                "SELECT 1 FROM jobs WHERE id = ? OR fingerprint = ? LIMIT 1",
-                (job_id(posting.portal, posting.external_id), fingerprint(posting.company, posting.title)),
-            ).fetchone()
-        return row is not None
+            return c.execute(sql + " LIMIT 1", args).fetchone() is not None
 
     def upsert_job(self, posting: JobPosting, status: JobStatus, reason: str = "", **fields: Any) -> str:
         jid = job_id(posting.portal, posting.external_id)
@@ -117,6 +142,12 @@ class Tracker:
             "updated_at": ts,
             **{k: _encode(v) for k, v in fields.items()},
         }
+        # Written only when present: ON CONFLICT copies every listed column, so an unconditional key would let
+        # a later tag-less write (a re-score rebuilds the posting from the row) erase what the search found.
+        if posting.posted_text:
+            row["posted_text"] = posting.posted_text
+        if posting.tags:
+            row["tags_json"] = json.dumps(posting.tags)
         cols = ", ".join(row)
         marks = ", ".join("?" for _ in row)
         updates = ", ".join(f"{k}=excluded.{k}" for k in row if k not in ("id", "created_at"))
@@ -132,6 +163,11 @@ class Tracker:
         sets = ", ".join(f"{k} = ?" for k in fields)
         with self._conn() as c:
             c.execute(f"UPDATE jobs SET {sets} WHERE id = ?", [_encode(v) for v in fields.values()] + [jid])
+
+    def delete(self, jid: str) -> bool:
+        """Remove a job for good; it can come back as new in a later search. Returns whether it existed."""
+        with self._conn() as c:
+            return c.execute("DELETE FROM jobs WHERE id = ?", (jid,)).rowcount > 0
 
     def set_status(self, jid: str, status: JobStatus, reason: str = "") -> None:
         extra = {"applied_at": now_iso()} if status == JobStatus.APPLIED else {}

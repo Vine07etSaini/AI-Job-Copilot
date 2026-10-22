@@ -23,6 +23,19 @@ def find_term(text: str, term: str) -> int:
     return len(re.findall(pattern, text, flags=re.IGNORECASE))
 
 
+PAREN_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
+JS_SUFFIX_RE = re.compile(r"^(\w{3,})\.?js$", re.I)
+
+
+def name_forms(name: str) -> list[str]:
+    """A skill name plus forms JDs use: "Retrieval-Augmented Generation (RAG)" is also "RAG", "React.js" is "React"."""
+    if m := PAREN_RE.match(name):
+        return [name, m.group(1), m.group(2)]
+    if m := JS_SUFFIX_RE.match(name):
+        return [name, m.group(1)]
+    return [name]
+
+
 class SkillBank:
     def __init__(self, profile: Profile):
         self.profile = profile
@@ -30,6 +43,9 @@ class SkillBank:
         for s in profile.skills:
             for t in (s.name, *s.aliases):
                 self._canonical[norm(t)] = s.name
+        for s in profile.skills:  # second pass: a derived form never overrides a name or alias you wrote
+            for t in name_forms(s.name)[1:]:
+                self._canonical.setdefault(norm(t), s.name)
         self._equivalents: dict[str, list[str]] = {}
         for jd_term, mine in profile.equivalents.items():
             resolved = [self._canonical[norm(m)] for m in mine if norm(m) in self._canonical]
@@ -56,9 +72,13 @@ class SkillBank:
     def is_learning(self, term: str) -> bool:
         return norm(term) in self._learning
 
+    def skills_in(self, text: str) -> list[str]:
+        """Your skills whose name or any alias appears in `text`, in profile order."""
+        return [s for s in self.names if any(find_term(text, f) for f in self.surface_forms(s))]
+
     def surface_forms(self, skill: str) -> list[str]:
         """All spellings of one of your skills (name + aliases)."""
         for s in self.profile.skills:
             if s.name == skill:
-                return [s.name, *s.aliases]
+                return [*name_forms(s.name), *s.aliases]
         return [skill]

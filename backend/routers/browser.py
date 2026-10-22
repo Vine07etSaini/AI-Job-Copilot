@@ -1,22 +1,117 @@
-"""Live view of the automated browser: status and an interactive WebSocket view."""
+"""Live views of the automated browser windows (one per portal): status and an interactive WebSocket view."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+
+from backend import busy
+from backend.deps import get_tracker
+from job_copilot.config import get_settings
+from job_copilot.db import Tracker
+from job_copilot.portals import browser as browser_portal
 from job_copilot.portals import live_view
+from job_copilot.portals.base import BROWSER_PORTALS, PortalBlocked, get_portal
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/browser", tags=["browser"])
 
+VIEW_TIMEOUT = 15 * 60  # an open posting closes by itself after this many seconds
+OPEN_TIMEOUT = 90       # how long the request waits for the page to load before answering
+# Postings opened for the user to look at, per portal: setting the event closes that window.
+_viewers: dict[str, asyncio.Event] = {}
+
 
 @router.get("/status")
 def status() -> dict:
-    return {"active": live_view.is_active()}
+    """Which portals have a browser window open right now (each one can be watched over /ws?portal=...)."""
+    portals = live_view.active_portals()
+    return {"active": bool(portals), "portals": portals, "viewing": sorted(_viewers)}
+
+
+class OpenRequest(BaseModel):
+    job_id: str
+
+
+@router.post("/open")
+async def open_posting(body: OpenRequest, tracker: Annotated[Tracker, Depends(get_tracker)]) -> dict:
+    """Open a job's posting in its portal's own browser window, shown in that portal's live view.
+
+    The window stays open (and the portal busy) until POST /{portal}/close or VIEW_TIMEOUT.
+    """
+    job = tracker.get(body.job_id)
+    if job is None:
+        raise HTTPException(404, f"No job with id '{body.job_id}'.")
+    portal = job["portal"]
+    if portal not in BROWSER_PORTALS:
+        raise HTTPException(400, f"'{portal}' jobs have no browser window; open the link in a new tab instead.")
+    claimed = busy.acquire(portal)
+    close = _viewers[portal] = asyncio.Event()
+    opened: asyncio.Future = asyncio.get_running_loop().create_future()
+    # If the request already gave up waiting, nobody reads a late failure; mark it read to avoid a warning.
+    opened.add_done_callback(lambda f: f.cancelled() or f.exception())
+
+    async def view() -> None:
+        try:
+            async with get_portal(portal, get_settings().portals.get(portal)) as site:
+                await site.show(job["url"])
+                opened.set_result(None)
+                try:
+                    await asyncio.wait_for(close.wait(), VIEW_TIMEOUT)
+                except asyncio.TimeoutError:
+                    log.info("Closing the %s posting after %ss", portal, VIEW_TIMEOUT)
+        except Exception as e:  # reported to the request below (or logged if it already answered)
+            if not opened.done():
+                opened.set_exception(e)
+            else:
+                log.warning("%s live view ended with %r", portal, e)
+        finally:
+            _viewers.pop(portal, None)
+            busy.release(claimed)
+
+    asyncio.create_task(view())
+    try:
+        await asyncio.wait_for(asyncio.shield(opened), OPEN_TIMEOUT)
+    except PortalBlocked as e:
+        raise HTTPException(409, str(e)) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "The page is taking long to load; it stays open in the live view.") from None
+    except Exception as e:
+        raise HTTPException(502, f"Could not open the posting: {e}") from None
+    return {"portal": portal, "url": job["url"]}
+
+
+@router.post("/open-chrome")
+async def open_in_chrome(body: OpenRequest, tracker: Annotated[Tracker, Depends(get_tracker)]) -> dict:
+    """Open a job's posting in a normal, visible window of the copilot's Chrome (your saved logins) for you to use.
+
+    Not a live view and not driven by the copilot, so it needs no busy claim and works for any job status.
+    """
+    job = tracker.get(body.job_id)
+    if job is None:
+        raise HTTPException(404, f"No job with id '{body.job_id}'.")
+    portal = job["portal"]
+    if portal not in BROWSER_PORTALS:
+        raise HTTPException(400, f"'{portal}' jobs have no browser session; open the link in a new tab instead.")
+    try:
+        await browser_portal.open_in_chrome(job["url"], get_settings().portals[portal].cdp_url)
+    except Exception as e:
+        raise HTTPException(502, f"Could not open Chrome: {e}") from None
+    return {"portal": portal, "url": job["url"]}
+
+
+@router.post("/{portal}/close")
+def close_posting(portal: str) -> dict:
+    """Close a posting opened with /open (searches and logins close their own windows)."""
+    if event := _viewers.get(portal):
+        event.set()
+    return {"portal": portal, "closing": event is not None}
 
 
 # ---- Interactive view: screencast out, mouse/keyboard in ----
@@ -49,13 +144,13 @@ async def _apply_input(page, msg: dict) -> None:
 
 
 @router.websocket("/ws")
-async def interactive(ws: WebSocket) -> None:
-    """Stream the automated page as JPEG frames and accept mouse/keyboard events."""
+async def interactive(ws: WebSocket, portal: str) -> None:
+    """Stream one portal's page as JPEG frames and accept mouse/keyboard events for it."""
     if ws.headers.get("origin") not in ALLOWED_ORIGINS:
         await ws.close(code=1008)
         return
     await ws.accept()
-    page = live_view.current_page()
+    page = live_view.current_page(portal)
     if page is None:
         await ws.send_json({"type": "idle"})
         await ws.close()
@@ -89,7 +184,8 @@ async def interactive(ws: WebSocket) -> None:
     await cdp.send("Page.startScreencast", {"format": "jpeg", "quality": 60, "maxWidth": 1280, "maxHeight": 900})
 
     async def send_frames() -> None:
-        while live_view.is_active():
+        # Stop when the portal closes or switches page (Indeed Apply opens its own tab): the client reconnects to it.
+        while live_view.current_page(portal) is page:
             try:
                 params = await asyncio.wait_for(frames.get(), timeout=1)
             except asyncio.TimeoutError:
@@ -102,7 +198,7 @@ async def interactive(ws: WebSocket) -> None:
     async def receive_input() -> None:
         while True:
             msg = await ws.receive_json()
-            if (current := live_view.current_page()) is not None:
+            if (current := live_view.current_page(portal)) is not None:
                 try:
                     await _apply_input(current, msg)
                 except Exception as e:  # a bad event or navigating page must not end the session

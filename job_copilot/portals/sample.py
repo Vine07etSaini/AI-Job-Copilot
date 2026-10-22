@@ -13,7 +13,8 @@ from job_copilot.portals.base import Portal
 class SamplePortal(Portal):
     name = "sample"
 
-    async def search(self, role: str, location: str, max_age_days: int, experience_years: float) -> list[JobPosting]:
+    async def search(self, role: str, location: str, max_age_days: int, experience_years: float,
+                     target_cards: int = 0) -> list[JobPosting]:
         jobs = json.loads((DATA_DIR / "sample_jobs.json").read_text(encoding="utf-8"))
         return [JobPosting(portal=self.name, posted_at=parse_posted(j.get("posted_text")), **j) for j in jobs]
 

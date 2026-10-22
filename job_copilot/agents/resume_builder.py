@@ -12,7 +12,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from job_copilot.agents.honesty_guard import GuardReport, guard
-from job_copilot.agents.skill_bank import SkillBank
+from job_copilot.agents.skill_bank import SkillBank, find_term
 from job_copilot.config import IST, RESUMES_DIR, TEMPLATES_DIR, ensure_dirs
 from job_copilot.llm.chat import LLM
 from job_copilot.models import JDAnalysis, JobPosting, MatchResult, Profile, ProjectRewrite, TailoredContent
@@ -39,6 +39,21 @@ def base_content(profile: Profile) -> TailoredContent:
         projects=[ProjectRewrite(project_id=p.id, description=p.description) for p in profile.projects if p.on_resume],
         keywords_used=[],
     )
+
+
+def resume_gaps(profile: Profile, match: MatchResult, bank: SkillBank) -> list[str]:
+    """Matched must-have skills your base resume never shows outside its skills list: the reason to tailor it.
+
+    The skills list is ignored because it holds every skill you have; recruiters and ATS look for them in the
+    summary, projects and experience.
+    """
+    text = "\n".join([
+        profile.summary,
+        *(f"{p.name} {' '.join(p.tech)} {p.description}" for p in profile.projects if p.on_resume),
+        *(f"{e.title} {' '.join(e.bullets)}" for e in profile.experience),
+    ])
+    skills = dict.fromkeys(m.split(" (for ")[0] for m in match.matched_mandatory)
+    return [s for s in skills if not any(find_term(text, f) for f in bank.surface_forms(s))]
 
 
 def tailor(profile: Profile, posting: JobPosting, analysis: JDAnalysis, match: MatchResult, bank: SkillBank,
@@ -109,6 +124,16 @@ def resume_as_text(profile: Profile, content: TailoredContent) -> list[str]:
     for rw in content.projects:
         lines += [by_id.get(rw.project_id, rw.project_id), rw.description]
     return lines
+
+
+def remove_resume(resume_path: str) -> None:
+    """Delete a tailored PDF and its vault JSON; anything outside the resume folder is left alone."""
+    pdf = Path(resume_path).resolve()
+    if not pdf.is_relative_to(RESUMES_DIR.resolve()):
+        log.warning("Not deleting %s: outside %s", pdf, RESUMES_DIR)
+        return
+    for f in (pdf, pdf.with_suffix(".json")):
+        f.unlink(missing_ok=True)
 
 
 async def build_resume(profile: Profile, posting: JobPosting, content: TailoredContent, job_id: str,

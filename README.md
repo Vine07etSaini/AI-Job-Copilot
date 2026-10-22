@@ -38,11 +38,14 @@ python main.py check
 | `python main.py import-resume resume.pdf` | Build a draft `config/profile.imported.yaml` from your resume PDF (needs `GEMINI_API_KEY`); edit it, then `python main.py import-resume --apply` to replace `profile.yaml` (backup kept). Fill `preferences` by hand |
 | `python main.py run --source sample --no-email` | Try the full pipeline offline on `data/sample_jobs.json` |
 | `python main.py login naukri` | Log in to Naukri (automatic with `NAUKRI_EMAIL`/`NAUKRI_PASSWORD` in `.env`, else by hand in a visible browser; session is saved). With credentials set, expired sessions are also re-logged automatically during `apply` |
-| `python main.py run` | Daily run: search Naukri → freshness/dedupe → Gemini JD analysis → score → tailored PDF → report email |
+| `python main.py run` | Daily run over every enabled portal (Naukri, Indeed; `--source naukri` for one): search → freshness/dedupe → JD analysis → score → tailored PDF or auto-apply (hybrid) → report email |
+| `python main.py login indeed` | Log in to Indeed by hand (it signs in with an emailed code); or use "Log in to Indeed" in the web UI |
+| `python main.py login linkedin` | Log in to LinkedIn (tries `LINKEDIN_EMAIL`/`LINKEDIN_PASSWORD` once, else by hand); or "Log in to LinkedIn" in the web UI |
 | `python main.py review` | Approve / reject pending jobs, open the tailored resume |
 | `python main.py apply --max 5` | Apply to approved jobs (daily + per-portal caps) |
 | `python main.py jobs --status pending_review` | List tracked jobs |
 | `python main.py report --send` | Build/email today's Excel report |
+| `python main.py rescore` | Re-score jobs that missed the threshold against your current profile (e.g. after adding a skill); no browser. Also runs at the start of every `run` |
 | `python main.py chat` | Chat with the **Gemini agent**, which drives the copilot through its **MCP tools** |
 | `python main.py ask "show my top 5 matches"` | One-shot question to the agent |
 | `python main.py mcp` | Run the MCP server over stdio for any MCP client |
@@ -207,9 +210,16 @@ job-copilot/
 match_threshold: 70
 max_job_age_days: 7             # only jobs posted in the last 7 days
 skip_if_date_unknown: true      # skip postings with no parsable date
+forget_filtered_after_days: 14  # a job filtered out this long ago may be looked at again (0 = never)
+triage: rank                    # LLM reads the search cards before any page is opened:
+                                # off = deterministic order | rank = re-order | filter = may also drop
+triage_threshold: 40            # filter mode only: cards scored below this are never opened
+triage_max_cards: 60            # cards sent in that one call per portal per run
+search_card_target: 120         # cards a portal collects per run; the pages it opens are picked from these
 max_applications_per_day: 25
 per_portal_cap: 10
-mode: review        # review = you approve each apply | auto = fully automatic
+mode: hybrid        # review = you approve each apply | hybrid = auto-apply when your resume already shows the
+                    # job's key skills, review only jobs that need a tailored resume | auto = fully automatic
 locked_sections: [experience, education]
 editable_sections: [skills, projects]
 send_recruiter_emails: draft_only
@@ -243,7 +253,9 @@ blacklist_companies: []
 - [x] MCP server + Gemini agent (chat / ask)
 
 **Phase 2**
-- [ ] Indeed, LinkedIn, InstaHire
+- [x] Indeed (search, job pages, Indeed Apply; same live view as Naukri)
+- [x] LinkedIn (search, job pages, Easy Apply with a 5/day cap; same live view)
+- [ ] InstaHire
 - [ ] New-project approval flow
 - [ ] Recruiter email drafts
 - [ ] Profile sync across portals

@@ -11,13 +11,21 @@ interface JobsState {
   selectedId: string | null;
   detail: JobDetail | null;
   loading: boolean;
-  running: "search" | "apply" | null;
+  searching: string[]; // sources with a search in progress; different portals can search at the same time
+  applying: boolean;
 
   setFilter: (f: JobStatus | "all") => Promise<void>;
   refresh: () => Promise<void>;
   select: (id: string | null) => Promise<void>;
   approve: (id: string) => Promise<void>;
   reject: (id: string) => Promise<void>;
+  remove: (id: string) => Promise<void>;
+  /** Per portal: the id of the job open in its live view ("" when a posting is open but we don't know which). */
+  liveViewing: Record<string, string>;
+  setLiveViewing: (portal: string, open: boolean) => void;
+  openInLiveView: (id: string) => Promise<void>;
+  closeLiveView: (portal: string, waitClosed?: boolean) => Promise<void>;
+  openInChrome: (id: string) => Promise<void>;
   runSearch: (source: string, limit: number) => Promise<void>;
   applyApproved: (max: number) => Promise<void>;
 }
@@ -33,7 +41,9 @@ export const useJobsStore = create<JobsState>()((set, get) => ({
   selectedId: null,
   detail: null,
   loading: false,
-  running: null,
+  searching: [],
+  liveViewing: {},
+  applying: false,
 
   setFilter: async (filter) => {
     set({ filter });
@@ -91,21 +101,79 @@ export const useJobsStore = create<JobsState>()((set, get) => ({
     }
   },
 
+  remove: async (id) => {
+    try {
+      await api.remove(id);
+      toast("Deleted.");
+      if (get().selectedId === id) set({ selectedId: null, detail: null });
+      await get().refresh();
+    } catch (e) {
+      toast(errText(e), "error");
+    }
+  },
+
+  // Called from the live panels' status poll, so a posting closed elsewhere (panel button, 15-min timeout) shows here.
+  setLiveViewing: (portal, open) => {
+    const current = get().liveViewing;
+    if (open && !(portal in current)) set({ liveViewing: { ...current, [portal]: "" } });
+    if (!open && portal in current) {
+      const { [portal]: _, ...rest } = current;
+      set({ liveViewing: rest });
+    }
+  },
+
+  openInLiveView: async (id) => {
+    const job = get().jobs.find((j) => j.id === id) ?? get().detail;
+    const portal = job?.portal;
+    try {
+      // One posting per portal window: opening another job there replaces the open one.
+      if (portal && portal in get().liveViewing) await get().closeLiveView(portal, true);
+      await api.openPosting(id);
+      if (portal) set({ liveViewing: { ...get().liveViewing, [portal]: id } });
+      toast(`Opened in the ${portal ?? ""} live view. Tick "Take control" to use it; "Close live view" when done.`);
+      window.scrollTo({ top: 0, behavior: "smooth" }); // the live panels are at the top
+    } catch (e) {
+      toast(errText(e), "error");
+    }
+  },
+
+  closeLiveView: async (portal, waitClosed = false) => {
+    try {
+      await api.closePosting(portal);
+      // The window closes a moment later; when replacing it, wait so the portal is free again.
+      for (let i = 0; waitClosed && i < 30 && (await api.browserStatus()).viewing.includes(portal); i++) {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      get().setLiveViewing(portal, false);
+    } catch (e) {
+      toast(errText(e), "error");
+    }
+  },
+
+  openInChrome: async (id) => {
+    try {
+      await api.openInChrome(id);
+      toast("Opened in the copilot's Chrome (your saved logins). Look for the new Chrome window.");
+    } catch (e) {
+      toast(errText(e), "error");
+    }
+  },
+
   runSearch: async (source, limit) => {
-    set({ running: "search" });
+    set({ searching: [...get().searching, source] });
     try {
       const stats = await api.search(source, limit);
-      toast(`Search done: ${JSON.stringify(stats)}`);
+      toast(`${source} search done: ${JSON.stringify(stats)}`);
       await get().refresh();
     } catch (e) {
       toast(errText(e), "error");
     } finally {
-      set({ running: null });
+      set({ searching: get().searching.filter((s) => s !== source) });
     }
   },
 
   applyApproved: async (max) => {
-    set({ running: "apply" });
+    set({ applying: true });
     try {
       const stats = await api.apply(max);
       toast(`Apply done: ${JSON.stringify(stats)}`);
@@ -113,7 +181,7 @@ export const useJobsStore = create<JobsState>()((set, get) => ({
     } catch (e) {
       toast(errText(e), "error");
     } finally {
-      set({ running: null });
+      set({ applying: false });
     }
   },
 }));

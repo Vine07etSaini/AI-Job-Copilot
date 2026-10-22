@@ -9,6 +9,7 @@ from pypdf import PdfReader
 
 from job_copilot.agents.skill_bank import find_term
 from job_copilot.llm.chat import LLM
+from job_copilot.llm.redact import mask_also
 from job_copilot.models import ExtractedProject, Profile, Project, ResumeExtract, Skill
 
 SYSTEM = """You read resumes precisely and copy only what the resume literally says.
@@ -44,7 +45,14 @@ def _hyperlinks(reader: PdfReader) -> list[str]:
     return list(urls)
 
 
+def name_guess(text: str) -> str:
+    """The resume's first line when it looks like a name, so it is masked before the profile holds it."""
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return first if len(first.split()) <= 4 and not re.search(r"[\d@/|:]", first) else ""
+
+
 def extract_profile(text: str, llm: LLM) -> ResumeExtract:
+    llm = mask_also(llm, name=name_guess(text))
     return llm.generate_json(f"Resume text:\n\n{text}", ResumeExtract, system=SYSTEM, temperature=0.0)
 
 

@@ -1,4 +1,4 @@
-import type { JobDetail, JobStatus, JobSummary, LoginStatus, Profile, SkillGaps, Stats } from "./types";
+import type { JobDetail, JobStatus, JobSummary, LoginPortal, LoginStatus, Profile, SkillGaps, Stats } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -29,12 +29,17 @@ export const api = {
   stats: () => request<Stats>("/jobs/stats"),
   approve: (id: string) => post<{ id: string; status: JobStatus }>(`/jobs/${id}/approve`),
   reject: (id: string, reason?: string) => post<{ id: string; status: JobStatus }>(`/jobs/${id}/reject`, { reason }),
+  remove: (id: string) => request<{ id: string; deleted: boolean }>(`/jobs/${id}`, { method: "DELETE" }),
   search: (source: string, limit: number) => post<Record<string, number>>("/search", { source, limit }),
   apply: (max_count: number) => post<Record<string, number>>("/apply", { max_count }),
   skillGaps: () => request<SkillGaps>("/skill-gaps"),
-  loginStatus: () => request<LoginStatus>("/login/naukri"),
-  loginStart: (email?: string, password?: string) => post<LoginStatus>("/login/naukri", { email, password }),
-  loginDone: () => post<LoginStatus>("/login/naukri/done"),
-  browserActive: () => request<{ active: boolean }>("/browser/status"),
+  loginStatus: (portal: LoginPortal) => request<LoginStatus>(`/login/${portal}`),
+  loginStart: (portal: LoginPortal, email?: string, password?: string) =>
+    post<LoginStatus>(`/login/${portal}`, { email, password }),
+  loginDone: (portal: LoginPortal) => post<LoginStatus>(`/login/${portal}/done`),
+  browserStatus: () => request<{ active: boolean; portals: string[]; viewing: string[] }>("/browser/status"),
+  openPosting: (job_id: string) => post<{ portal: string; url: string }>("/browser/open", { job_id }),
+  openInChrome: (job_id: string) => post<{ portal: string; url: string }>("/browser/open-chrome", { job_id }),
+  closePosting: (portal: string) => post<{ portal: string; closing: boolean }>(`/browser/${portal}/close`),
   profile: () => request<Profile>("/profile"),
 };

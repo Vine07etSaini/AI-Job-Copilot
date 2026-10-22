@@ -1,0 +1,87 @@
+# Single source of truth about you. Fill this in with your real data.
+# The agent never edits `experience` or `education`.
+
+personal:
+  name: Your Name
+  email: you@example.com
+  phone: "+91-90000-00000"
+  location: Bengaluru, India
+  linkedin: https://linkedin.com/in/your-handle
+  github: https://github.com/your-handle
+  portfolio: ""
+
+summary: >-
+  Backend engineer with 4 years of experience building Python services,
+  REST APIs and data pipelines on AWS.
+
+total_experience_years: 4
+
+# ----- Verified Skill Bank -----
+# The agent may only surface skills listed here. `aliases` are alternative
+# spellings that count as the same skill.
+skills:
+  - {name: Python, aliases: [python3], years: 4}
+  - {name: FastAPI, years: 2}
+  - {name: Django, years: 2}
+  - {name: REST APIs, aliases: [REST, RESTful APIs, RESTful], years: 4}
+  - {name: SQL, years: 4}
+  - {name: PostgreSQL, aliases: [Postgres], years: 3}
+  - {name: AWS, aliases: [Amazon Web Services], years: 3}
+  - {name: Docker, years: 2}
+  - {name: Git, years: 4}
+  - {name: Playwright, years: 1}
+  - {name: Pandas, years: 3}
+  - {name: LLM, aliases: [Large Language Models, GenAI, Generative AI], years: 1}
+
+# Approved equivalents: if a JD asks for the key, the listed skill of yours may
+# be surfaced instead (e.g. JD says "GCP", you know "AWS" -> "cloud" match).
+equivalents:
+  GCP: [AWS]
+  Azure: [AWS]
+  MySQL: [PostgreSQL]
+  Flask: [FastAPI, Django]
+
+# Skills you are learning (never put on the resume, used for skill-gap report)
+learning_goals: [Kubernetes, Terraform]
+
+# ----- Projects (descriptions are editable by the agent, within guardrails) -----
+projects:
+  - id: job-copilot
+    name: AI Job Copilot
+    github: https://github.com/your-handle/job-copilot
+    tech: [Python, Playwright, LLM, SQL]
+    on_resume: true
+    description: >-
+      Agent that discovers jobs, scores them against my profile and tailors my
+      resume for each application.
+  - id: order-service
+    name: Order Processing Service
+    github: https://github.com/your-handle/order-service
+    tech: [Python, FastAPI, PostgreSQL, Docker, AWS]
+    on_resume: true
+    description: >-
+      High-throughput order processing REST API handling 2k requests per second
+      with async workers and PostgreSQL.
+
+# ----- LOCKED: never modified by the agent -----
+experience:
+  - title: Software Engineer
+    company: Example Tech Pvt Ltd
+    location: Bengaluru
+    start: Jan 2022
+    end: Present
+    bullets:
+      - Built and maintained Python microservices serving 1M+ daily requests.
+      - Reduced API latency by 40% by introducing caching and query tuning.
+
+education:
+  - degree: B.Tech, Computer Science
+    institution: Example University
+    year: "2021"
+
+# ----- Job preferences -----
+preferences:
+  roles: [Python Developer, Backend Developer]
+  locations: [Bengaluru, Remote]
+  min_salary_lpa: 12
+  notice_period_days: 30

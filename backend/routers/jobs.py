@@ -1,4 +1,4 @@
-"""Job tracker endpoints: list, detail, stats, approve / reject."""
+"""Job tracker endpoints: list, detail, stats, approve / reject, delete."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.deps import get_tracker
-from backend.schemas import JobDetail, JobSummary, RejectRequest, StatsResponse, StatusChange
+from backend.schemas import JobDeleted, JobDetail, JobSummary, RejectRequest, StatsResponse, StatusChange
+from job_copilot.agents.resume_builder import remove_resume
 from job_copilot.db import Tracker
 from job_copilot.models import JobStatus
 
@@ -59,3 +60,15 @@ def reject_job(job_id: str, body: RejectRequest, tracker: TrackerDep):
     _get_or_404(tracker, job_id)
     tracker.set_status(job_id, JobStatus.REJECTED, body.reason)
     return StatusChange(id=job_id, status=str(JobStatus.REJECTED))
+
+
+@router.delete("/{job_id}", response_model=JobDeleted)
+def delete_job(job_id: str, tracker: TrackerDep):
+    """Delete a job and its tailored resume. Applied jobs are kept: their record stops a second application."""
+    job = _get_or_404(tracker, job_id)
+    if job["status"] == JobStatus.APPLIED:
+        raise HTTPException(409, "Applied jobs can't be deleted: the record stops the same job being applied to twice.")
+    if job["resume_path"]:
+        remove_resume(job["resume_path"])
+    tracker.delete(job_id)
+    return JobDeleted(id=job_id)

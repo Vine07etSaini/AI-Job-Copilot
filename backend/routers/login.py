@@ -1,4 +1,4 @@
-"""Log in to Naukri from the web UI: opens the login page in the live view; optionally tries typed-in details once."""
+"""Log in to a job portal from the web UI: its login page opens in the live view; typed-in details are tried once."""
 
 from __future__ import annotations
 
@@ -8,20 +8,23 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, SecretStr
 
-from job_copilot.config import PortalCredentials
-from job_copilot.portals import live_view
+from backend import busy
+from job_copilot.config import PortalCredentials, get_settings
+from job_copilot.portals.base import BROWSER_PORTALS, get_portal
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/login", tags=["login"])
 
-# One login at a time; module state because the API is a single local process.
-_state: dict = {"state": "idle", "message": ""}
-_finished = asyncio.Event()
-_task: asyncio.Task | None = None
+# Per portal, so logging in to one portal never blocks a run on another. Module state: one local API process.
+_states: dict[str, dict] = {}
+_finished: dict[str, asyncio.Event] = {}
+_tasks: dict[str, asyncio.Task] = {}
 
 
-def is_running() -> bool:
-    return _task is not None and not _task.done()
+def is_running(portal: str | None = None) -> bool:
+    """Is a login in progress on this portal (or, without a name, on any portal)?"""
+    names = [portal] if portal else list(_tasks)
+    return any(n in _tasks and not _tasks[n].done() for n in names)
 
 
 class LoginRequest(BaseModel):
@@ -31,42 +34,57 @@ class LoginRequest(BaseModel):
     password: SecretStr | None = None  # SecretStr keeps it out of reprs and logs; it is never stored
 
 
-def _set(state: str, message: str) -> None:
-    _state.update(state=state, message=message)
+def _check(portal: str) -> None:
+    if portal not in BROWSER_PORTALS:
+        raise HTTPException(404, f"Unknown portal '{portal}'. Use one of: {', '.join(BROWSER_PORTALS)}.")
 
 
-@router.get("/naukri")
-def status() -> dict:
-    return _state
+def _state(portal: str) -> dict:
+    return _states.setdefault(portal, {"portal": portal, "state": "idle", "message": ""})
 
 
-@router.post("/naukri")
-async def start(body: LoginRequest) -> dict:
-    """Open Naukri's login page in the automated browser (watch it in the live view)."""
-    global _task
-    if is_running() or live_view.is_active():
-        raise HTTPException(409, "The browser is busy (a login or a search/apply run is in progress).")
+@router.get("/{portal}")
+def status(portal: str) -> dict:
+    _check(portal)
+    return _state(portal)
+
+
+@router.post("/{portal}")
+async def start(portal: str, body: LoginRequest) -> dict:
+    """Open the portal's login page in its own browser window (watch and take control in its live view)."""
+    _check(portal)
+    claimed = busy.acquire(portal)  # 409 if this portal is already searching, applying or logging in
     creds = None
     if body.email and body.password:
         creds = PortalCredentials(user=body.email, password=body.password.get_secret_value())
-    from job_copilot.portals.naukri import interactive_login
+    from job_copilot.portals.browser import interactive_login
 
-    _finished.clear()
-    _set("running", "Opening Naukri...")
+    site = get_portal(portal, get_settings().portals.get(portal))
+    finished = _finished[portal] = asyncio.Event()
+    state = _state(portal)
+
+    def on_state(new: str, message: str) -> None:
+        state.update(state=new, message=message)
+
+    on_state("running", f"Opening {site.label}...")
 
     async def run() -> None:
         try:
-            await interactive_login(creds, _finished, _set)
+            await interactive_login(site, creds, finished, on_state)
         except Exception as e:  # report to the UI rather than dying silently inside the task
             log.exception("Interactive login failed")
-            _set("failed", f"Login failed: {type(e).__name__}")
+            on_state("failed", f"Login failed: {type(e).__name__}")
+        finally:
+            busy.release(claimed)
 
-    _task = asyncio.create_task(run())
-    return _state
+    _tasks[portal] = asyncio.create_task(run())
+    return state
 
 
-@router.post("/naukri/done")
-def done() -> dict:
+@router.post("/{portal}/done")
+def done(portal: str) -> dict:
     """The user says they finished logging in by hand: stop waiting and verify."""
-    _finished.set()
-    return _state
+    _check(portal)
+    if event := _finished.get(portal):
+        event.set()
+    return _state(portal)

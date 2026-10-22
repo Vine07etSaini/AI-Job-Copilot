@@ -8,12 +8,10 @@ Naukri changes its markup often, so selectors are kept in one place with fallbac
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from urllib.parse import urlencode
 
-from playwright.async_api import BrowserContext, Page, async_playwright
 from playwright.async_api import TimeoutError as PWTimeout
 
 from job_copilot.agents.freshness import parse_posted
@@ -22,10 +20,8 @@ from job_copilot.agents.screening import answer_question
 from job_copilot.agents.skill_bank import SkillBank
 from job_copilot.config import PortalCredentials, STORAGE_DIR, get_portal_credentials, get_profile, get_settings
 from job_copilot.llm.gemini import gemini_available
-from job_copilot.models import JobPosting, JobStatus, PortalSettings
-from job_copilot.portals import live_view
-from job_copilot.portals.base import Portal, PortalBlocked
-from job_copilot.portals.chrome_debug import ensure_chrome, hide_from_taskbar, keep_awake
+from job_copilot.models import JobPosting, JobStatus
+from job_copilot.portals.browser import ChromePortal
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +54,7 @@ CARDS_JS = """
       salary: txt('.sal-wrap, .sal'),
       location: txt('.locWdth, .loc-wrap, .loc'),
       posted: txt('.job-post-day, [class*="post-day"], .postedDate'),
+      snippet: txt('.job-desc, [class*="job-desc"]'),
       tags: Array.from(el.querySelectorAll('ul.tags-gt li, .tags li')).map(li => li.innerText.trim()).filter(Boolean),
     };
   })
@@ -101,54 +98,23 @@ def search_url(role: str, location: str, page: int, max_age_days: int, experienc
     return f"{BASE}/{path}?{urlencode(params)}"
 
 
-class NaukriPortal(Portal):
+class NaukriPortal(ChromePortal):
     name = "naukri"
-
-    async def open(self) -> None:
-        """Attach to a normal Chrome over CDP (started on demand); it is a real, visible browser, not a launched one."""
-        self._login_attempted = False
-        cdp_url = self.settings.cdp_url
-        # Blocking subprocess/HTTP polling, so keep it off the event loop.
-        await asyncio.to_thread(ensure_chrome, cdp_url)
-        keep_awake(True)  # same thread (the event loop) as close(), which the API requires
-        self._pw = await async_playwright().start()
-        self.browser = await self._pw.chromium.connect_over_cdp(cdp_url)
-        if self.browser.contexts:
-            self.ctx: BrowserContext = self.browser.contexts[0]  # the default context holds the saved Naukri login
-        else:  # unexpected Chrome state: a fresh context has no saved login, so say so instead of failing with IndexError
-            log.warning("Chrome exposed no default browser context; using a new one (the saved Naukri login will not apply)")
-            self.ctx = await self.browser.new_context()
-        # Our own tab, so the user's other tabs are left alone.
-        self.page: Page = await self.ctx.new_page()
-        hide_from_taskbar(cdp_url)  # new windows get their own taskbar button, so do it after opening our tab
-        live_view.set_page(self.page)
-
-    async def close(self) -> None:
-        """Close our tab, then the debug Chrome itself unless `close_chrome_on_finish` is off (it restarts on demand)."""
-        live_view.set_page(None)
-        keep_awake(False)
-        if getattr(self, "page", None) and not self.page.is_closed():
-            await self.page.close()
-        if self.settings.close_chrome_on_finish and getattr(self, "browser", None):
-            try:  # clean shutdown through CDP, so the profile (login cookies) is flushed to disk
-                await (await self.browser.new_browser_cdp_session()).send("Browser.close")
-            except Exception as e:  # already gone or refused: nothing more to do
-                log.debug("Could not close Chrome: %s", e)
-        if getattr(self, "_pw", None):
-            await self._pw.stop()  # disconnects from Chrome
-
-    async def _goto(self, url: str) -> None:
-        await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        title = (await self.page.title() or "").lower()
-        if "access denied" in title or "captcha" in title:
-            raise PortalBlocked(f"Naukri blocked the request ({title}). Lower the volume and retry later.")
+    label = "Naukri"
+    login_url = LOGIN_URL
 
     # ------------------------------------------------------------ search
 
-    async def search(self, role: str, location: str, max_age_days: int, experience_years: float) -> list[JobPosting]:
+    async def search(self, role: str, location: str, max_age_days: int, experience_years: float,
+                     target_cards: int = 0) -> list[JobPosting]:
         results: list[JobPosting] = []
-        for page_no in range(1, self.settings.pages_per_search + 1):
-            url = search_url(role, location, page_no, max_age_days, experience_years)
+        seen: set[str] = set()
+        pages_done, new_on_page = 0, 0
+        while pages_done == 0 or self.keep_paging(pages_done, new_on_page, len(results), target_cards):
+            if pages_done:
+                await self.pause()
+            pages_done += 1
+            url = search_url(role, location, pages_done, max_age_days, experience_years)
             log.info("Naukri search: %s", url)
             await self._goto(url)
             try:
@@ -156,20 +122,22 @@ class NaukriPortal(Portal):
             except PWTimeout:
                 log.info("No job cards on %s", url)
                 break
-            cards = await self.page.evaluate(CARDS_JS)
-            for c in cards:
+            new_on_page = 0
+            for c in await self.page.evaluate(CARDS_JS):
                 if not c["url"] or not c["title"]:
                     continue
                 ext_id = c["id"] or (m.group(1) if (m := re.search(r"-(\d{6,})(?:[?#]|$)", c["url"])) else c["url"])
+                if ext_id in seen:
+                    continue
+                seen.add(ext_id)
+                new_on_page += 1
                 results.append(JobPosting(
                     portal=self.name, external_id=ext_id, title=c["title"], company=c["company"] or "Unknown",
                     url=c["url"].split("?")[0], location=c["location"], experience_text=c["exp"],
                     salary_text=c["salary"], posted_text=c["posted"], posted_at=parse_posted(c["posted"]),
-                    tags=c["tags"],
+                    tags=c["tags"], snippet=c["snippet"],
                 ))
-            if len(cards) < 15:
-                break
-            await self.pause()
+            log.info("Naukri page %d: %d new cards (%d collected)", pages_done, new_on_page, len(results))
         return results
 
     async def fetch_details(self, posting: JobPosting) -> JobPosting:
@@ -223,6 +191,9 @@ class NaukriPortal(Portal):
         await self.pause()
         return True, "logged in"
 
+    def on_login_page(self, url: str) -> bool:
+        return "nlogin" in url
+
     async def is_logged_in(self) -> bool:
         """The home page title says 'Mynaukri' only for a signed-in user."""
         await self._goto(BASE)
@@ -230,12 +201,6 @@ class NaukriPortal(Portal):
         return "mynaukri" in (await self.page.title()).lower()
 
     # ------------------------------------------------------------ apply
-
-    async def _visible(self, selector: str) -> bool:
-        try:
-            return await self.page.locator(selector).first.is_visible(timeout=1500)
-        except PWTimeout:
-            return False
 
     async def apply(self, url: str) -> tuple[JobStatus, str]:
         await self._goto(url)
@@ -309,55 +274,3 @@ class NaukriPortal(Portal):
             if not await self._visible(DRAWER):
                 return None
         return "too many questions"
-
-
-async def login_session() -> str:
-    """Sign in automatically if possible, else let the user sign in by hand; the session is saved in storage/browser."""
-    async with NaukriPortal(PortalSettings()) as portal:
-        try:
-            ok, reason = await portal.login()
-        except PortalBlocked as e:
-            ok, reason = False, str(e)
-        if ok:
-            return f"automatic login: {reason}"
-        log.warning("Automatic login not possible: %s", reason)
-        if "nlogin" not in portal.page.url:
-            await portal.page.goto(LOGIN_URL)
-        await asyncio.to_thread(input, "Log in to Naukri in the opened browser window, then press Enter here... ")
-        return "manual login"
-
-
-async def interactive_login(creds: PortalCredentials | None, finished: asyncio.Event, on_state, timeout: int = 300) -> bool:
-    """Open the login page for the user. Try `creds` once if given, else wait while the user signs in by hand
-    (through the web UI's live view). `on_state(state, message)` reports progress; `finished` ends the wait early."""
-    async with NaukriPortal(PortalSettings()) as portal:
-        try:
-            await portal._goto(LOGIN_URL)
-            if "nlogin" not in portal.page.url:
-                on_state("logged_in", "Already logged in.")
-                return True
-            if creds is not None:
-                on_state("running", "Signing in with the details you entered...")
-                ok, reason = await portal.login(creds)
-                if ok:
-                    on_state("logged_in", "Logged in.")
-                    return True
-                on_state("waiting", f"{reason}. Finish logging in using the live view (tick 'Take control').")
-                if "nlogin" not in portal.page.url:
-                    await portal._goto(LOGIN_URL)
-            else:
-                on_state("waiting", "Log in using the live view (tick 'Take control'), then press Done.")
-            deadline = asyncio.get_running_loop().time() + timeout
-            while "nlogin" in portal.page.url and not finished.is_set():
-                if asyncio.get_running_loop().time() > deadline:
-                    on_state("failed", "Timed out waiting for the login.")
-                    return False
-                await asyncio.sleep(2)
-            if await portal.is_logged_in():
-                on_state("logged_in", "Logged in. The session is saved.")
-                return True
-            on_state("failed", "Not logged in. Try again.")
-            return False
-        except PortalBlocked as e:
-            on_state("failed", str(e))
-            return False

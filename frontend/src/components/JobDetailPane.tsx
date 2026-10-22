@@ -1,16 +1,24 @@
 import { useJobsStore } from "../store/jobsStore";
+import { BROWSER_PORTALS } from "../api/types";
+import { confirmDelete } from "./confirmDelete";
 
 export default function JobDetailPane() {
   const detail = useJobsStore((s) => s.detail);
   const selectedId = useJobsStore((s) => s.selectedId);
   const approve = useJobsStore((s) => s.approve);
   const reject = useJobsStore((s) => s.reject);
+  const remove = useJobsStore((s) => s.remove);
+  const openInLiveView = useJobsStore((s) => s.openInLiveView);
+  const closeLiveView = useJobsStore((s) => s.closeLiveView);
+  const liveViewing = useJobsStore((s) => s.liveViewing);
+  const openInChrome = useJobsStore((s) => s.openInChrome);
 
   if (!selectedId) return <section className="detail empty">Select a job to review it.</section>;
   if (!detail) return <section className="detail empty">Loading…</section>;
 
   const canApprove = ["pending_review", "rejected", "needs_manual"].includes(detail.status);
   const canReject = !["applied", "rejected"].includes(detail.status);
+  const canDelete = detail.status !== "applied"; // the record stops a second application to the same job
 
   return (
     <section className="detail">
@@ -27,7 +35,30 @@ export default function JobDetailPane() {
         <button disabled={!canReject} onClick={() => reject(detail.id)}>
           Reject
         </button>
-        {detail.url && (
+        <button
+          className="danger"
+          disabled={!canDelete}
+          title={canDelete ? "Delete this job and its tailored resume" : "Applied jobs are kept"}
+          onClick={() => confirmDelete(detail.title) && remove(detail.id)}
+        >
+          Delete
+        </button>
+        {detail.url && BROWSER_PORTALS.includes(detail.portal) &&
+          (liveViewing[detail.portal] === detail.id ? (
+            <button className="danger" onClick={() => closeLiveView(detail.portal)}>
+              Close live view
+            </button>
+          ) : (
+            // Opens in the portal's own automated window, signed in, so you can read it or apply by hand there.
+            <button onClick={() => openInLiveView(detail.id)}>Open in live view</button>
+          ))}
+        {detail.url && BROWSER_PORTALS.includes(detail.portal) && (
+          // A normal window of the copilot's Chrome (where your portal logins live), not your everyday browser.
+          <button title="Open in the copilot's Chrome (your saved logins)" onClick={() => openInChrome(detail.id)}>
+            ↗
+          </button>
+        )}
+        {detail.url && !BROWSER_PORTALS.includes(detail.portal) && (
           <a href={detail.url} target="_blank" rel="noreferrer">
             Open posting ↗
           </a>

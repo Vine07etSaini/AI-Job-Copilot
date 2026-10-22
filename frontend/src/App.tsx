@@ -21,11 +21,18 @@ export default function App() {
       <header>
         <h1>AI Job Copilot</h1>
         <div className="actions">
-          <LoginPanel />
+          <LoginPanel portal="naukri" label="Naukri" credentials />
+          <LoginPanel portal="indeed" label="Indeed" />
+          <LoginPanel portal="linkedin" label="LinkedIn" credentials />
           <ActionsBar />
         </div>
       </header>
-      <BrowserView />
+      {/* One live window per portal: Naukri, Indeed and LinkedIn can run at the same time. */}
+      <div className="browser-views">
+        <BrowserView portal="naukri" label="Naukri" />
+        <BrowserView portal="indeed" label="Indeed" />
+        <BrowserView portal="linkedin" label="LinkedIn" />
+      </div>
       <StatusTabs />
       <main>
         <JobList />

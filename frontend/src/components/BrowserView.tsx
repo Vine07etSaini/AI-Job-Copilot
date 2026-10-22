@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../api/client";
+import { useJobsStore } from "../store/jobsStore";
 
 type Frame = { src: string; w: number; h: number };
 
 const POLL_MS = 2000;
 const MOVE_THROTTLE_MS = 50;
 
-/** Live, interactive view of the automated browser: frames come in over a WebSocket, clicks and keys go back. */
-export default function BrowserView() {
+interface Props {
+  portal: string;
+  label: string;
+}
+
+/** Live, interactive view of one portal's browser window: frames come in over a WebSocket, clicks and keys go back. */
+export default function BrowserView({ portal, label }: Props) {
   const [frame, setFrame] = useState<Frame | null>(null);
   const [control, setControl] = useState(false);
+  const viewing = useJobsStore((s) => portal in s.liveViewing); // a posting opened from the job list, not a run
+  const setLiveViewing = useJobsStore((s) => s.setLiveViewing);
+  const closeLiveView = useJobsStore((s) => s.closeLiveView);
   const wsRef = useRef<WebSocket | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const lastMove = useRef(0);
@@ -22,7 +31,7 @@ export default function BrowserView() {
 
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/api/browser/ws`);
+      const ws = new WebSocket(`${proto}://${location.host}/api/browser/ws?portal=${encodeURIComponent(portal)}`);
       wsRef.current = ws;
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
@@ -37,7 +46,9 @@ export default function BrowserView() {
 
     const tick = async () => {
       try {
-        if ((await api.browserActive()).active && !wsRef.current) connect();
+        const status = await api.browserStatus();
+        setLiveViewing(portal, status.viewing.includes(portal));
+        if (status.portals.includes(portal) && !wsRef.current) connect();
       } catch {
         // backend busy or down: try again next tick
       }
@@ -50,7 +61,7 @@ export default function BrowserView() {
       window.clearTimeout(timer);
       wsRef.current?.close();
     };
-  }, []);
+  }, [portal]);
 
   const send = useCallback((msg: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
@@ -66,7 +77,10 @@ export default function BrowserView() {
   return (
     <section className="browser-view">
       <div className="browser-view-head">
-        <h3>Automated browser (live)</h3>
+        <h3>{label} (live)</h3>
+        {viewing && (
+          <button className="danger" onClick={() => void closeLiveView(portal)}>Close live view</button>
+        )}
         <label>
           <input type="checkbox" checked={control} onChange={(e) => setControl(e.target.checked)} /> Take control
         </label>
@@ -89,7 +103,7 @@ export default function BrowserView() {
           send({ type: "key", key: e.key, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey, shift: e.shiftKey });
         }}
       >
-        <img ref={imgRef} src={frame.src} alt="Live view of the automated browser" draggable={false} />
+        <img ref={imgRef} src={frame.src} alt={`Live view of the ${label} browser window`} draggable={false} />
       </div>
       <small className="muted">
         {control ? "You are controlling the browser: click the picture, then type." : "View only. Tick “Take control” to click and type (for OTP or captcha)."}

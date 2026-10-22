@@ -36,7 +36,7 @@ class StatsResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    source: str = Field(default="sample", description="'sample' (offline) or 'naukri' (opens a browser)")
+    source: str = Field(default="sample", description="'sample' (offline), 'naukri', 'indeed', 'linkedin' or 'all' (open a browser)")
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -57,6 +57,11 @@ class AnalyzeRequest(BaseModel):
 class StatusChange(BaseModel):
     id: str
     status: str
+
+
+class JobDeleted(BaseModel):
+    id: str
+    deleted: bool = True
 
 
 class SkillGap(BaseModel):

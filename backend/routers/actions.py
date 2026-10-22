@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
+from backend import busy
 from backend.deps import get_tracker
-from backend.routers import login
 from backend.schemas import AnalyzeRequest, ApplyRequest, SearchRequest, SkillGapResponse
 from job_copilot import pipeline
 from job_copilot.agents.jd_analyzer import analyze_jd
@@ -16,30 +16,34 @@ from job_copilot.agents.matcher import score_job
 from job_copilot.agents.skill_bank import SkillBank
 from job_copilot.config import get_profile, get_settings
 from job_copilot.db import Tracker
-from job_copilot.models import JobPosting
+from job_copilot.models import JobPosting, JobStatus
 
 router = APIRouter(prefix="/api", tags=["actions"])
 
 TrackerDep = Annotated[Tracker, Depends(get_tracker)]
 
 
-def _not_during_login() -> None:
-    if login.is_running():
-        raise HTTPException(409, "A Naukri login is in progress; finish it first.")
-
-
 @router.post("/search")
 async def run_search(body: SearchRequest) -> dict:
-    """Search a portal, score postings and tailor resumes. 'naukri' can take several minutes."""
-    _not_during_login()
-    return await pipeline.discover(body.source, body.limit)
+    """Search a portal (or 'all' enabled portals in parallel), score postings and tailor resumes.
+
+    Browser portals can take several minutes. Different portals may search at the same time (each has its own
+    window and live view); the same portal twice gets a 409.
+    """
+    if body.source == "all":
+        sources = pipeline.portals_for("all")
+        with busy.claim(*sources):
+            return await pipeline.discover_many(sources, body.limit)
+    with busy.claim(body.source):
+        return await pipeline.discover(body.source, body.limit)
 
 
 @router.post("/apply")
-async def apply_approved(body: ApplyRequest) -> dict:
-    """Apply to approved jobs, respecting the daily and per-portal caps. Only call on explicit user action."""
-    _not_during_login()
-    return await pipeline.apply_approved(body.max_count)
+async def apply_approved(body: ApplyRequest, tracker: TrackerDep) -> dict:
+    """Apply to approved jobs, each portal in parallel, within the daily and per-portal caps. User action only."""
+    portals = {j["portal"] for j in tracker.list(status=str(JobStatus.APPROVED), limit=10_000)}
+    with busy.claim(*portals):
+        return await pipeline.apply_approved(body.max_count)
 
 
 @router.post("/analyze")
@@ -50,7 +54,9 @@ def analyze(body: AnalyzeRequest) -> dict:
     posting = JobPosting(portal="adhoc", external_id="adhoc", title=body.title or "Unknown role",
                          company=body.company or "Unknown", url="", description=body.description)
     analysis = analyze_jd(posting, bank, pipeline._llm())
-    match = score_job(profile, analysis, bank, get_settings().score_weights)
+    if not body.title:  # judge the role by the title the JD itself gives, not by the placeholder
+        posting.title = analysis.role_title
+    match = score_job(profile, analysis, bank, get_settings().score_weights, posting)
     return {"analysis": analysis.model_dump(), "match": match.model_dump()}
 
 

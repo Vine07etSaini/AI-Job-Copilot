@@ -70,7 +70,13 @@ export interface Profile {
   projects: { id: string; name: string; tech: string[]; on_resume: boolean; description: string }[];
 }
 
+export type LoginPortal = "naukri" | "indeed" | "linkedin";
+
+/** Portals driven in their own automated browser window (and shown in a live view). */
+export const BROWSER_PORTALS: string[] = ["naukri", "indeed", "linkedin"];
+
 export interface LoginStatus {
+  portal: LoginPortal | null;
   state: "idle" | "running" | "waiting" | "logged_in" | "failed";
   message: string;
 }

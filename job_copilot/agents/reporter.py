@@ -16,7 +16,7 @@ COLUMNS = [
     ("Portal", "portal", 10), ("Job Title", "title", 34), ("Company", "company", 26),
     ("Employer Email", "recruiter_email", 26), ("Employer Phone", "recruiter_phone", 16),
     ("Match Score", "match_score", 11), ("Resume URL", "resume_url", 40), ("Status", "status", 15),
-    ("Why", "why", 50), ("Job URL", "url", 40), ("Posted", "posted_at", 18),
+    ("Why", "why", 50), ("Reason", "status_reason", 40), ("Job URL", "url", 40), ("Posted", "posted_at", 18),
 ]
 
 
@@ -34,7 +34,7 @@ def build_report(jobs: list[dict], day: datetime | None = None) -> Path:
         why = (j.get("match") or {}).get("explanation") or j.get("status_reason") or ""
         row = {**j, "why": why}
         ws.append([row.get(key) or "" for _, key, _ in COLUMNS])
-        for idx in (7, 10):  # make URLs clickable
+        for idx in (7, 11):  # make URLs clickable
             cell = ws.cell(row=ws.max_row, column=idx)
             if cell.value:
                 cell.hyperlink = cell.value
@@ -58,6 +58,14 @@ def build_report(jobs: list[dict], day: datetime | None = None) -> Path:
 def summary_text(jobs: list[dict]) -> str:
     counts = Counter(j["status"] for j in jobs)
     lines = [f"Jobs processed: {len(jobs)}"] + [f"  {k}: {v}" for k, v in counts.most_common()]
+    applied = [j for j in jobs if j["status"] == "applied"]
+    review = [j for j in jobs if j["status"] == "pending_review"]
+    if applied:
+        lines += ["", f"Applied automatically ({len(applied)}):"]
+        lines += [f"  [{j['match_score']}] {j['title']} @ {j['company']}" for j in applied]
+    if review:
+        lines += ["", f"Waiting for your review - a tailored resume is ready ({len(review)}):"]
+        lines += [f"  [{j['match_score']}] {j['title']} @ {j['company']}: {j['status_reason']}" for j in review]
     top = [j for j in jobs if j["status"] in ("pending_review", "approved", "applied")][:10]
     if top:
         lines += ["", "Top matches:"]

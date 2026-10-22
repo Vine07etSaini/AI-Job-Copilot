@@ -21,6 +21,7 @@ from job_copilot.agents.matcher import score_job
 from job_copilot.agents.skill_bank import SkillBank
 from job_copilot.config import get_profile, get_settings, save_profile, setup_logging
 from job_copilot.db import Tracker
+from job_copilot.llm.redact import profile_for_llm
 from job_copilot.models import JobPosting, JobStatus
 
 server = MCPServer(
@@ -51,8 +52,11 @@ def _get_or_error(job_id: str) -> dict:
 
 @server.tool()
 def get_profile_summary() -> dict:
-    """Get the user's profile: skills (Verified Skill Bank), projects, experience, preferences."""
-    return get_profile().model_dump(mode="json")
+    """Get the user's profile: skills (Verified Skill Bank), projects, experience, preferences.
+
+    Contact details and links are left out: this output goes to an LLM.
+    """
+    return profile_for_llm(get_profile())
 
 
 @server.tool()
@@ -74,10 +78,19 @@ def get_job(job_id: str) -> dict:
 async def run_job_search(source: str = "naukri", limit: int = 10) -> dict:
     """Search a portal for fresh jobs, score them and tailor resumes for good matches.
 
-    source: 'naukri' (opens a browser; can take several minutes) or 'sample' (offline test data).
+    source: 'naukri', 'indeed' or 'linkedin' (open a browser; can take several minutes) or 'sample' (offline data).
     limit: max number of job pages to open.
     """
     return await pipeline.discover(source, limit)
+
+
+@server.tool()
+async def rescore_jobs() -> dict:
+    """Re-score jobs that missed the match threshold against the current profile (e.g. after a skill was added).
+
+    Opens no pages; jobs that now pass get a tailored resume and wait for review.
+    """
+    return await pipeline.rescore()
 
 
 @server.tool()
@@ -88,7 +101,9 @@ def analyze_job_description(description: str, title: str = "", company: str = ""
     posting = JobPosting(portal="adhoc", external_id="adhoc", title=title or "Unknown role",
                          company=company or "Unknown", url="", description=description)
     analysis = analyze_jd(posting, bank, pipeline._llm())
-    match = score_job(profile, analysis, bank, get_settings().score_weights)
+    if not title:  # judge the role by the title the JD itself gives, not by the placeholder
+        posting.title = analysis.role_title
+    match = score_job(profile, analysis, bank, get_settings().score_weights, posting)
     return {"analysis": analysis.model_dump(), "match": match.model_dump()}
 
 
@@ -172,8 +187,8 @@ def update_project_description(project_id: str, description: str) -> dict:
 
 @server.resource("profile://yaml", mime_type="text/yaml")
 def profile_yaml() -> str:
-    """The raw profile YAML."""
-    return yaml.safe_dump(get_profile().model_dump(mode="json"), sort_keys=False)
+    """The profile YAML without contact details and links (MCP clients pass resources to their LLM)."""
+    return yaml.safe_dump(profile_for_llm(get_profile()), sort_keys=False)
 
 
 def main() -> None:

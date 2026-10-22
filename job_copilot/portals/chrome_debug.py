@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -20,6 +21,10 @@ from job_copilot.config import STORAGE_DIR
 log = logging.getLogger(__name__)
 
 CHROME_PROFILE_DIR = STORAGE_DIR / "chrome-profile"
+OFF_SCREEN = {"left": -32000, "top": -32000}  # windows are parked here; they still render for the live view
+# Portals open in parallel; without this, two of them could both see "no Chrome" and start one each.
+_START_LOCK = threading.Lock()
+START_ATTEMPTS = 2
 _CANDIDATES = [
     Path(os.environ.get(var, "")) / rel
     for var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
@@ -42,8 +47,13 @@ def is_up(cdp_url: str) -> bool:
         return False
 
 
-def ensure_chrome(cdp_url: str, wait_seconds: float = 20) -> bool:
+def ensure_chrome(cdp_url: str, wait_seconds: float = 30) -> bool:
     """Make sure a debuggable Chrome answers on `cdp_url`; start one if not. Returns True if we started it."""
+    with _START_LOCK:
+        return _ensure_chrome(cdp_url, wait_seconds)
+
+
+def _ensure_chrome(cdp_url: str, wait_seconds: float) -> bool:
     if is_up(cdp_url):
         return False
     exe = find_chrome()
@@ -54,21 +64,33 @@ def ensure_chrome(cdp_url: str, wait_seconds: float = 20) -> bool:
     log.info("Starting Chrome on debug port %d (profile %s)", port, CHROME_PROFILE_DIR)
     # Detached: Chrome must outlive this process; we only ever disconnect from it.
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    subprocess.Popen(
-        [exe, f"--remote-debugging-port={port}", f"--user-data-dir={CHROME_PROFILE_DIR}",
-         "--no-first-run", "--no-default-browser-check",
-         # Keep the page rendering (and screenshots working) when the window is covered, off-screen or the monitor is off.
-         "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
-         "--disable-background-timer-throttling", "--window-position=-32000,-32000",
-         "https://www.naukri.com"],
-        creationflags=flags, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
-    )
+    args = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={CHROME_PROFILE_DIR}",
+            "--no-first-run", "--no-default-browser-check",
+            # Keep pages rendering (and screenshots working) when a window is covered, off-screen or the monitor is off.
+            "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+            "--disable-background-timer-throttling", f"--window-position={OFF_SCREEN['left']},{OFF_SCREEN['top']}",
+            "about:blank"]
+    # A Chrome that is still shutting down (the last run just closed it) takes over a new launch on the same profile
+    # and then exits, so no debug port appears. Once it is gone, a second launch works.
+    for _ in range(START_ATTEMPTS):
+        subprocess.Popen(args, creationflags=flags, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+        deadline = time.monotonic() + wait_seconds / START_ATTEMPTS
+        while time.monotonic() < deadline:
+            if is_up(cdp_url):
+                return True
+            time.sleep(0.5)
+        log.info("Chrome did not open debug port %d yet; launching again", port)
+    raise RuntimeError(f"Chrome did not open debug port {port} within {wait_seconds:.0f}s.")
+
+
+def wait_until_down(cdp_url: str, wait_seconds: float = 15) -> bool:
+    """Wait for a closing Chrome to really exit, so the next run starts a fresh one instead of reaching a dying one."""
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
-        if is_up(cdp_url):
+        if not is_up(cdp_url):
             return True
-        time.sleep(0.5)
-    raise RuntimeError(f"Chrome did not open debug port {port} within {wait_seconds:.0f}s.")
+        time.sleep(0.3)
+    return False
 
 
 def keep_awake(on: bool) -> None:
@@ -97,6 +119,7 @@ def hide_from_taskbar(cdp_url: str) -> int:
     The windows are marked WS_EX_TOOLWINDOW instead of being hidden: a hidden window stops rendering,
     which would break screenshots, while a tool window renders normally but has no taskbar button.
     Call it again after opening a new tab/window, because those get their own taskbar buttons.
+    Windows on screen are left alone: those are the ones you opened yourself ("open in Chrome" in the web UI).
     """
     if os.name != "nt":
         return 0
@@ -115,7 +138,10 @@ def hide_from_taskbar(cdp_url: str) -> int:
     def visit(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd):
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        parked = rect.left <= OFF_SCREEN["left"] // 2  # the copilot's own windows sit far off-screen
+        if owner.value == pid and user32.IsWindowVisible(hwnd) and parked:
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             if not style & WS_EX_TOOLWINDOW or style & WS_EX_APPWINDOW:
                 # The taskbar only re-reads the style when the window is hidden and shown again.

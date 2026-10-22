@@ -62,6 +62,11 @@ def _check_active_llm() -> None:
         return
     label = getattr(llm, "label", type(llm).__name__) if llm else "none (offline heuristics)"
     console.print(f"[green]OK[/] LLM in use: {label} (LLM_PROVIDER={provider_name()})")
+    if llm:
+        from job_copilot.llm.redact import RedactingLLM
+
+        console.print("[green]OK[/] personal details masked before every LLM call" if isinstance(llm, RedactingLLM)
+                      else "[yellow]WARN[/] redact_pii is off: your contact details are sent to the LLM")
 
 
 def _check_groq() -> None:
@@ -100,7 +105,7 @@ def _check_ollama() -> None:
 
 
 @app.command()
-def run(source: str = typer.Option("naukri", help="naukri | sample"),
+def run(source: str = typer.Option("all", help="all (every enabled portal) | naukri | indeed | linkedin | sample"),
         limit: int = typer.Option(None, help="Max job pages to open"),
         email: bool = typer.Option(True, help="Email the daily report")) -> None:
     """Daily run: discover, filter, tailor resumes, (auto-apply), report."""
@@ -174,6 +179,14 @@ def apply(max_count: int = typer.Option(None, "--max", help="Max applications th
 
 
 @app.command()
+def rescore() -> None:
+    """Re-score jobs that missed the threshold against your current profile (no browser)."""
+    from job_copilot import pipeline
+
+    console.print_json(json.dumps(asyncio.run(pipeline.rescore())))
+
+
+@app.command()
 def report(send: bool = typer.Option(False, help="Email the report")) -> None:
     """Build today's Excel report."""
     from job_copilot import pipeline
@@ -184,19 +197,21 @@ def report(send: bool = typer.Option(False, help="Email the report")) -> None:
 
 
 @app.command()
-def login(portal: str = typer.Argument("naukri")) -> None:
-    """Log in to a portal (automatically with .env credentials, else by hand); the session is reused later."""
-    if portal != "naukri":
-        raise typer.BadParameter("Only 'naukri' is supported in Phase 1")
-    from job_copilot.portals.naukri import login_session
+def login(portal: str = typer.Argument("naukri", help="naukri | indeed | linkedin")) -> None:
+    """Log in to a portal (automatically with .env credentials where supported, else by hand); the session is reused."""
+    from job_copilot.config import get_settings
+    from job_copilot.portals.base import BROWSER_PORTALS, get_portal
+    from job_copilot.portals.browser import login_session
 
-    how = asyncio.run(login_session())
+    if portal not in BROWSER_PORTALS:
+        raise typer.BadParameter(f"Use one of: {', '.join(BROWSER_PORTALS)}")
+    how = asyncio.run(login_session(get_portal(portal, get_settings().portals.get(portal))))
     console.print(f"Session saved ({how}).")
 
 
 @app.command()
 def chrome() -> None:
-    """Start the debug Chrome the Naukri portal attaches to (log in to Naukri in it once)."""
+    """Start the debug Chrome the portals attach to (log in to Naukri, Indeed and LinkedIn in it once)."""
     from job_copilot.config import get_settings
     from job_copilot.portals.chrome_debug import ensure_chrome
 

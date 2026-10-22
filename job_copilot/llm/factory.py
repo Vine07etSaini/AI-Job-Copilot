@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 
+from job_copilot.config import get_profile, get_settings
 from job_copilot.llm.chat import LLM, ChatCompletionsLLM
 from job_copilot.llm.gemini import Gemini, gemini_available
 from job_copilot.llm.providers import GROQ_URL, groq_available, groq_model, ollama_host, ollama_model
+from job_copilot.llm.redact import RedactingLLM, profile_pii
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ def get_llm() -> LLM | None:
 
     `auto` uses the first configured of Gemini (key), Groq (key), Ollama (OLLAMA_MODEL set). Ollama is never probed
     here, so a missing local server shows up as a normal LLM error at call time, not as a slow start.
+    With `redact_pii` on (the default) every provider is wrapped so personal details never leave the machine.
     """
     name = provider_name()
     if name == "none":
@@ -49,4 +52,5 @@ def get_llm() -> LLM | None:
     elif not _available(name):
         log.warning("LLM_PROVIDER=%s but it is not configured (see .env.example); using offline heuristics.", name)
         return None
-    return _build(name)
+    llm = _build(name)
+    return RedactingLLM(llm, lambda: profile_pii(get_profile())) if get_settings().redact_pii else llm
